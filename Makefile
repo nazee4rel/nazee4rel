@@ -24,6 +24,12 @@ down:  ## Stop the stack
 logs:  ## Tail backend logs
 	docker compose logs -f backend
 
+worker-logs:  ## Tail collection worker and scheduler logs
+	docker compose logs -f worker beat
+
+collect:  ## Run one collection cycle immediately (does not wait for beat)
+	docker compose exec worker celery -A app.worker.celery_app call collect.post_metrics
+
 migrate:  ## Apply migrations
 	docker compose exec backend alembic upgrade head
 

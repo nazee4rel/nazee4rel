@@ -29,6 +29,7 @@ dependencies = [
     "httpx>=0.27.0",
     "python-multipart>=0.0.12",
     "typer>=0.13.0",
+    "celery[redis]>=5.4.0",
 ]
 
 [project.optional-dependencies]
@@ -68,3 +69,10 @@ python_version = "3.12"
 strict = true
 plugins = []
 ignore_missing_imports = true
+
+# Celery ships no type information for its task decorator, so every task would
+# otherwise be reported as untyped. Scoped narrowly rather than relaxing strict
+# mode across the project.
+[[tool.mypy.overrides]]
+module = "app.worker.tasks"
+disallow_untyped_decorators = false

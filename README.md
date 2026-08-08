@@ -4,9 +4,10 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 3 complete** — X OAuth 2.0 + PKCE, the API client with its
-cost governor, and the capability probe. You can connect a real X account and see exactly
-what your access level provides. Scheduled collection begins in Phase 4.
+**Current status: Phase 4 complete** — scheduled collection is running. Follower counts
+are snapshotted hourly, posts are discovered and their metrics captured on a decaying
+cadence, and every post gets a mandatory capture before its 30-day metrics window closes.
+The dataset is now accumulating. Turning it into analytics is Phase 5.
 
 Read [`docs/phase-1-architecture.md`](docs/phase-1-architecture.md) first. It documents the
 X API constraints that shape everything else, and three of them are load-bearing:
@@ -97,9 +98,12 @@ backend/
     services/   auth and audit services
     api/v1/     health, auth, accounts, x_oauth routers
     integrations/x/  endpoint registry, OAuth+PKCE, API client, rate limiting, capability probe
+    collectors/ snapshot schedule, payload parsing, the collectors themselves
+    worker/     Celery app and the beat schedule
     cli.py      create-owner, check-config
-  alembic/      migrations (0001 identity, 0002 OAuth state + usage ledger)
-  tests/        116 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost, probe
+  alembic/      0001 identity · 0002 OAuth state + usage ledger · 0003 posts + snapshots
+  tests/        178 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+                probe, snapshot scheduling, parsing, collectors
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
@@ -134,6 +138,38 @@ X API can do. It probes, records the result, and drives both collector and UI fr
 table. An endpoint that starts returning 403 next quarter degrades a panel to "unavailable
 since <date>" instead of silently producing zeros. Note that `UNKNOWN` ("not yet checked")
 is deliberately distinct from `UNAVAILABLE` ("confirmed absent").
+
+### How collection works (Phase 4)
+
+Two containers do the work: `worker` executes jobs, `beat` schedules them. Exactly one
+beat instance — two would double every job.
+
+```bash
+make worker-logs   # watch collection happen
+```
+
+Snapshot frequency decays with post age, because engagement velocity is front-loaded and
+every read costs money:
+
+| Post age | Frequency | Why |
+|---|---|---|
+| 0–24h | hourly | The curve is steepest here; this is where breakouts show |
+| 1–7d | every 6h | Long-tail accumulation |
+| 7–29d | daily | Slow drift |
+| **day 29** | **mandatory final freeze** | **Last chance before impressions vanish** |
+
+That works out to ~71 snapshots per post — about **$10.65/month at 5 posts/day**, and the
+Overview page projects it from your actual posting rate.
+
+**The freeze is the part that matters.** As the budget tightens the governor stretches the
+cadence (hourly → 2-hourly → daily) and finally stops ordinary snapshots altogether — but
+the pre-cliff freeze still runs even at zero budget. Losing resolution is recoverable;
+losing impressions is not. A dedicated hourly sweep gives every post a second, independent
+chance at its freeze in case the ordinary cycle is degraded or failing.
+
+Posts already past 30 days when you connect are recorded with their impressions marked
+**unavailable, not zero** — they were never obtainable, which is a different fact from a
+collection failure, and the dashboard says so.
 
 ### Three things worth knowing about the X integration
 
@@ -181,12 +217,12 @@ a live database.
 | 1 | Architecture, X API capability analysis, data model, agent design | Done |
 | 2 | Project structure, backend, database, authentication | Done |
 | 3 | X OAuth 2.0 + PKCE, API client, cost ledger, capability probe | Done |
-| 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Next |
-| 5 | Analytics engine: engagement, baselines, topics, timing, attribution | |
+| 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Done |
+| 5 | Analytics engine: engagement, baselines, topics, timing, attribution | Next |
 | 6 | Agent loop, Claude structured outputs, recommendations, verification | |
 | 7 | Full dashboard | |
 | 8 | Alerts and scheduled reports | |
 | 9 | Test hardening, security review, deployment | |
 
-Phase 4 is the one to reach quickly: until collectors run, the impression dataset is not
-accumulating, and that data cannot be recovered retroactively.
+Collection is live as of Phase 4, so the impression dataset is accumulating from now on.
+Everything from here builds on that history rather than racing it.

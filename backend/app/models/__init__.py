@@ -8,6 +8,13 @@ avoiding by convention.
 
 from app.db.base import Base
 from app.models.audit import AuditLog, SystemLog
+from app.models.collection import CollectionKind, CollectionRun, CollectionStatus
+from app.models.content import (
+    AccountMetricSnapshot,
+    Post,
+    PostMetricSnapshot,
+    PostType,
+)
 from app.models.enums import (
     AuditAction,
     CapabilityStatus,
@@ -21,13 +28,20 @@ from app.models.x_account import AccountCapability, OAuthToken, XAccount
 
 __all__ = [
     "AccountCapability",
+    "AccountMetricSnapshot",
     "ApiUsageLedger",
     "AuditAction",
     "AuditLog",
     "Base",
     "CapabilityStatus",
+    "CollectionKind",
+    "CollectionRun",
+    "CollectionStatus",
     "OAuthState",
     "OAuthToken",
+    "Post",
+    "PostMetricSnapshot",
+    "PostType",
     "Provenance",
     "Session",
     "SystemLog",

@@ -117,7 +117,7 @@ class OutboundRateLimiter:
         _local_state[key] = (state.remaining, state.reset_at)
         try:
             async with self.redis.pipeline() as pipe:
-                pipe.hset(key, mapping=payload)  # type: ignore[arg-type]
+                pipe.hset(key, mapping=payload)
                 pipe.expire(key, _STATE_TTL_SECONDS)
                 await pipe.execute()
         except Exception as exc:  # noqa: BLE001
@@ -132,7 +132,7 @@ class OutboundRateLimiter:
         """
         key = _key(account_id, endpoint_key)
         try:
-            raw = await self.redis.hgetall(key)
+            raw = await self.redis.hgetall(key)  # type: ignore[misc]
         except Exception as exc:  # noqa: BLE001
             log.error("x.ratelimit.degraded_to_local", error=str(exc), endpoint=endpoint_key)
             local_remaining, local_reset = _local_state.get(key, (None, None))
@@ -187,7 +187,7 @@ class OutboundRateLimiter:
 
         try:
             if await self.redis.exists(key):
-                await self.redis.hincrby(key, "remaining", -1)
+                await self.redis.hincrby(key, "remaining", -1)  # type: ignore[misc]
         except Exception as exc:  # noqa: BLE001
             log.warning("x.ratelimit.consume_failed", error=str(exc), endpoint=endpoint_key)
 

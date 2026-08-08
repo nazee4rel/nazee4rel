@@ -37,6 +37,10 @@ EXPECTED_TABLES = {
     "system_logs",
     "oauth_states",
     "api_usage_ledger",
+    "posts",
+    "post_metric_snapshots",
+    "account_metric_snapshots",
+    "collection_runs",
 }
 
 

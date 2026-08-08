@@ -1,4 +1,5 @@
 import CapabilityMatrix from "@/components/CapabilityMatrix";
+import CollectionHealth, { type CollectionHealthData } from "@/components/CollectionHealth";
 import PhaseNotice from "@/components/PhaseNotice";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
@@ -37,6 +38,12 @@ export default async function OverviewPage({
   const status = await getAccountsStatus();
   const usageResult = await apiFetch<UsageSummary>("/api/v1/x/usage");
   const usage = usageResult.ok ? usageResult.data : null;
+
+  const firstAccount = status?.accounts[0];
+  const healthResult = firstAccount
+    ? await apiFetch<CollectionHealthData>(`/api/v1/collection/${firstAccount.id}/health`)
+    : null;
+  const health = healthResult?.ok ? healthResult.data : null;
 
   if (!status) {
     return (
@@ -107,6 +114,8 @@ export default async function OverviewPage({
         </div>
       )}
 
+      {health && <CollectionHealth health={health} />}
+
       {usage && <ApiSpend usage={usage} />}
 
       <section className="grid gap-4 sm:grid-cols-2">
@@ -127,8 +136,9 @@ export default async function OverviewPage({
       </section>
 
       <PhaseNotice phase={5} title="Metrics arrive with the analytics engine">
-        Follower growth, engagement rate and growth score need collected history
-        to compute. Scheduled collection starts in Phase&nbsp;4.
+        Collection is running, so history is accumulating now. Turning it into
+        follower growth, engagement rate, topic performance and a growth score
+        is Phase&nbsp;5.
       </PhaseNotice>
     </div>
   );

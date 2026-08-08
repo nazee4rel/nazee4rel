@@ -119,6 +119,18 @@ async def oauth_callback(
         # honestly. It must not undo a successful connection.
         log.warning("x.probe.failed_after_connect", error=str(exc))
 
+    # Start collecting immediately rather than waiting for the next beat tick.
+    # Posts already past 30 days can never have their impressions recovered, so
+    # on day one every hour of delay costs data.
+    try:
+        from app.worker.tasks import backfill_account
+
+        backfill_account.delay(str(account.id))
+    except Exception as exc:  # noqa: BLE001
+        # No broker (or a worker-less deployment) must not fail the connection —
+        # the beat schedule will pick the account up regardless.
+        log.warning("x.backfill.enqueue_failed", error=str(exc))
+
     return RedirectResponse(f"{base}/overview?x_connect=success", status_code=303)
 
 
