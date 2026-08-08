@@ -62,6 +62,27 @@ class Settings(BaseSettings):
     x_billing_mode: BillingMode = "pay_per_use"
     x_monthly_budget_usd: float = 25.00
 
+    # X's own documentation is not reachable from every network, and X has
+    # renamed hosts before (twitter.com -> x.com). Keeping these configurable
+    # means a host change is an env edit rather than a code change.
+    x_api_base_url: str = "https://api.x.com"
+    x_authorize_url: str = "https://x.com/i/oauth2/authorize"
+    x_token_url: str = "https://api.x.com/2/oauth2/token"  # noqa: S105 — a URL, not a secret
+    x_revoke_url: str = "https://api.x.com/2/oauth2/revoke"
+
+    # Pay-per-use rates in micro-USD (1e-6 USD) per resource. Integers, because
+    # these are summed across tens of thousands of rows and float drift in a
+    # spend ledger is not acceptable.
+    #   Owned Reads (own data via own app): $0.001  -> 1_000
+    #   General reads:                      $0.005  -> 5_000
+    # Verify against your developer dashboard; they are rates, not constants.
+    x_cost_owned_read_micros: int = 1_000
+    x_cost_general_read_micros: int = 5_000
+
+    # OAuth handshake state lifetime. Short, because a pending authorization is
+    # an unused credential sitting in the database.
+    x_oauth_state_ttl_seconds: int = 600
+
     # Decision 4 safeguard: when false we never request `tweet.write`, so the
     # agent cannot publish even if every other control fails.
     x_enable_write_actions: bool = False

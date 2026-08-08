@@ -18,6 +18,11 @@ os.environ.setdefault("TOKEN_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"0" * 32
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("DATABASE_URL_OVERRIDE", "sqlite+aiosqlite:///:memory:")
 
+# Dummy X credentials so the OAuth handshake can be exercised. No test makes a
+# real call to X — every one runs against httpx.MockTransport.
+os.environ.setdefault("X_CLIENT_ID", "test-client-id")
+os.environ.setdefault("X_CLIENT_SECRET", "test-client-secret")  # noqa: S105
+
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402

@@ -35,6 +35,8 @@ EXPECTED_TABLES = {
     "account_capabilities",
     "audit_logs",
     "system_logs",
+    "oauth_states",
+    "api_usage_ledger",
 }
 
 
@@ -50,9 +52,7 @@ class OpRecorder:
     def create_table(self, name: str, *args: Any, **_kw: Any) -> None:
         self.tables[name] = {c.name for c in args if isinstance(c, sa.Column)}
 
-    def create_index(
-        self, index_name: str, table_name: str, columns: list[str], **kw: Any
-    ) -> None:
+    def create_index(self, index_name: str, table_name: str, columns: list[str], **kw: Any) -> None:
         self.indexes.append((index_name, table_name, columns))
         if kw.get("unique"):
             self.unique_indexes.add(index_name)

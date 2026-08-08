@@ -4,8 +4,9 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 2 complete** — foundation, database and authentication.
-The stack runs, migrations apply, and you can sign in. X integration begins in Phase 3.
+**Current status: Phase 3 complete** — X OAuth 2.0 + PKCE, the API client with its
+cost governor, and the capability probe. You can connect a real X account and see exactly
+what your access level provides. Scheduled collection begins in Phase 4.
 
 Read [`docs/phase-1-architecture.md`](docs/phase-1-architecture.md) first. It documents the
 X API constraints that shape everything else, and three of them are load-bearing:
@@ -59,13 +60,32 @@ make reset     # destroy all data and rebuild
   Turning it on enables *drafting* posts for your per-draft approval — it does not enable
   autonomous posting. Nothing is ever published without you approving that specific draft.
 
+### Connecting your X account (Phase 3)
+
+You need an app in the [X developer portal](https://developer.x.com) with **OAuth 2.0
+enabled as a Confidential Client**, and its callback URL set to exactly:
+
+```
+http://localhost:8000/api/v1/x/oauth/callback
+```
+
+Put the client ID and secret in `.env` as `X_CLIENT_ID` / `X_CLIENT_SECRET`, restart, then
+click **Connect X account** on the Overview page. The capability probe runs automatically
+on connection and tells you what your access level actually supports.
+
+Since Feb 2026 X bills pay-per-use. Reading your own data qualifies for **Owned Reads** at
+$0.001/resource, so the probe costs well under a cent and ordinary collection runs a few
+dollars a month. Month-to-date spend is shown on the Overview page, and the governor
+refuses calls that would breach `X_MONTHLY_BUDGET_USD` rather than letting a bill surprise
+you.
+
 Verify configuration without starting the server:
 
 ```bash
 docker compose exec backend python -m app.cli check-config
 ```
 
-## What Phase 2 contains
+## What the codebase contains
 
 ```
 backend/
@@ -75,10 +95,11 @@ backend/
     models/     users, sessions, x_accounts, oauth_tokens, account_capabilities, audit, system logs
     schemas/    Pydantic request/response types
     services/   auth and audit services
-    api/v1/     health, auth, accounts routers
+    api/v1/     health, auth, accounts, x_oauth routers
+    integrations/x/  endpoint registry, OAuth+PKCE, API client, rate limiting, capability probe
     cli.py      create-owner, check-config
-  alembic/      migrations (0001 creates all seven tables)
-  tests/        57 tests — auth flows, crypto primitives, migration parity
+  alembic/      migrations (0001 identity, 0002 OAuth state + usage ledger)
+  tests/        116 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost, probe
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
@@ -114,6 +135,24 @@ table. An endpoint that starts returning 403 next quarter degrades a panel to "u
 since <date>" instead of silently producing zeros. Note that `UNKNOWN` ("not yet checked")
 is deliberately distinct from `UNAVAILABLE` ("confirmed absent").
 
+### Three things worth knowing about the X integration
+
+**Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
+callable endpoint with its scopes, cost class and capability. The client refuses anything
+undeclared, so "never invent an API endpoint" fails locally and immediately rather than as
+a puzzling 404.
+
+**Refresh tokens are single-use.** X rotates them on every exchange and invalidates the
+old one, so two workers refreshing concurrently would destroy the credential and force a
+reconnect. Refresh is serialised behind a Redis lock with a re-read after acquisition, and
+the replacement is committed before anything else can fail.
+
+**The probe reads payloads, not just status codes.** A 200 does not mean impressions are
+available — X returns 200 while omitting `non_public_metrics` for posts past 30 days. So
+when an account has no post recent enough to decide, the probe records `UNKNOWN` rather
+than guessing either way, and an inconclusive run never overwrites a previously settled
+answer.
+
 ## Development without Docker
 
 ```bash
@@ -141,8 +180,8 @@ a live database.
 |---|---|---|
 | 1 | Architecture, X API capability analysis, data model, agent design | Done |
 | 2 | Project structure, backend, database, authentication | Done |
-| 3 | X OAuth 2.0 + PKCE, API client, cost ledger, capability probe | Next |
-| 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | |
+| 3 | X OAuth 2.0 + PKCE, API client, cost ledger, capability probe | Done |
+| 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Next |
 | 5 | Analytics engine: engagement, baselines, topics, timing, attribution | |
 | 6 | Agent loop, Claude structured outputs, recommendations, verification | |
 | 7 | Full dashboard | |
