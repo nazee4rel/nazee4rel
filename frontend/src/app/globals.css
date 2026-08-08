@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/*
+ * Palette. Dark-first, because this is a monitoring dashboard people leave
+ * open. Both themes are defined explicitly so nothing inherits a host
+ * background.
+ */
+@theme {
+  --color-canvas: #0b0f14;
+  --color-surface: #121822;
+  --color-surface-raised: #1a2230;
+  --color-border: #243044;
+  --color-text: #e6edf6;
+  --color-text-muted: #8da2bd;
+  --color-accent: #4c9aff;
+  --color-positive: #34d399;
+  --color-warning: #fbbf24;
+  --color-negative: #f87171;
+  /* Reserved for INFERRED values, which must never look like measured ones. */
+  --color-inferred: #c084fc;
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+}
+
+/* Tabular figures keep metric columns from jittering as values update. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+}

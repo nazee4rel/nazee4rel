@@ -467,6 +467,39 @@ and 5 are the ones where a wrong assumption costs rework.
 
 ---
 
+## 9. Decisions taken (answers to §8)
+
+| # | Decision | Consequence for the build |
+|---|---|---|
+| 1 | **X API access: unknown** | Design for pay-per-use (the only option for new developers since Feb 2026). The Phase 3 capability probe determines the true state on connection; billing mode is a config value, not an assumption. |
+| 2 | API budget | Default ceiling **$25/month**, configurable. Governor degradation ladder as §4.3. |
+| 3 | Account size | Assume ~5 posts/day for schedule sizing; tunable. |
+| 4 | **Autonomy: posting with approval (T1)** | We request `tweet.write` **in addition to** the read scopes. Posting is drafted by the agent, queued, and published only on explicit human approval with 24h expiry. T2 and T3 restrictions are unchanged — no spending, no deletion, no follows, no DMs. |
+| 5 | **Tenancy: single user, one X account** | Single-tenant deployment on a multi-tenant-ready schema (`user_id`/`x_account_id` scoping is present from the start so it never needs retrofitting). RBAC kept minimal. |
+| 6 | **Revenue: CSV import** | CSV import with column mapping and dedupe is the primary ingest path. A minimal manual entry/edit form ships alongside it — imported rows need correction, and sponsorship/brand-deal revenue has no statement to import. |
+| 7 | Alert channels | Default to email + dashboard; channel adapters are pluggable in Phase 8. |
+
+### Security consequences of decision 4
+
+Granting `tweet.write` is the single largest increase in blast radius in this design, so
+the compensating controls are explicit:
+
+- The write scope is **requested but disabled by default** via a config flag. Enabling it
+  is a deliberate, audited action, not a deployment default.
+- No post is ever published without a human approving that specific draft. Approvals do
+  not batch and do not carry over between drafts.
+- Approvals expire after 24h, so a stale queue cannot publish something later made
+  irrelevant or wrong by events.
+- Any draft produced by a run that ingested third-party text (replies, quote-posts) is
+  flagged as such in the approval UI — that is the prompt-injection path, and it is
+  surfaced rather than hidden.
+- Every publish is written to `agent_actions` and `audit_logs` with the approving user,
+  the source run, and the exact payload.
+- `tweet.moderate.write`, `follows.write`, `like.write` and DM scopes are **never**
+  requested, so T3 actions remain technically impossible regardless of any other failure.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)
