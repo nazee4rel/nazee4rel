@@ -1,5 +1,6 @@
 import Caveats from "@/components/Caveats";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
+import { BarSeries, ChartCard, type Point } from "@/components/charts";
 import { money, type RevenueResponse } from "@/components/analytics";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
@@ -95,6 +96,35 @@ export default async function RevenuePage() {
                 ))}
               </div>
             </section>
+          )}
+
+          {revenue.by_month.length > 1 && (
+            <ChartCard
+              title="Recorded revenue by month"
+              subtitle="Every bar is a figure you entered or imported — none of it came from X"
+              readout={<ProvenanceBadge provenance="USER_ENTERED" />}
+              startLabel={revenue.by_month[0]?.month}
+              endLabel={revenue.by_month[revenue.by_month.length - 1]?.month}
+              footer={
+                <>
+                  Months with no recorded entries are absent from this chart rather than
+                  drawn at zero. A month you simply have not imported yet is not a month
+                  you earned nothing.
+                </>
+              }
+            >
+              <BarSeries
+                points={revenue.by_month.map(
+                  (month): Point => ({
+                    label: month.month,
+                    value: month.total_minor / 100,
+                    note: `${month.entry_count} entr${month.entry_count === 1 ? "y" : "ies"}`,
+                  }),
+                )}
+                formatValue={(v) => money(Math.round(v * 100), revenue.currency)}
+                label="Revenue by month"
+              />
+            </ChartCard>
           )}
 
           {revenue.by_month.length > 0 && (

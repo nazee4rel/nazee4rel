@@ -11,6 +11,7 @@ API layer never has to guess whether a number is trustworthy.
 
 from __future__ import annotations
 
+import statistics
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -24,11 +25,23 @@ from app.analytics import revenue as revenue_analytics
 from app.core.logging import get_logger
 from app.models.content import AccountMetricSnapshot, Post, PostMetricSnapshot
 from app.models.enums import Provenance
-from app.models.revenue import Campaign, RevenueEntry
+from app.models.revenue import Campaign, PostTopic, RevenueEntry, Topic
 from app.models.user import User
 from app.models.x_account import XAccount
 
 log = get_logger(__name__)
+
+# A break longer than this in the hourly series is a collection gap rather than
+# a late job, and the chart should lift its pen across it.
+SERIES_GAP_HOURS = 3.0
+
+# Below this, a topic's median is one or two posts wearing a label.
+MIN_POSTS_PER_TOPIC = 3
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite returns naive datetimes; Postgres returns aware ones."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -59,6 +72,114 @@ class GrowthAnalysis:
     latest_anomaly: baselines.Anomaly | None = None
     trend: baselines.TrendResult | None = None
     hours_of_history: int = 0
+    caveats: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SeriesPoint:
+    at: datetime
+    followers: int
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A break in hourly collection. Charted as a discontinuity, never bridged."""
+
+    start: datetime
+    end: datetime
+    hours: float
+
+
+@dataclass(frozen=True)
+class DailyPoint:
+    day: str  # YYYY-MM-DD
+    followers: int | None
+    delta: float | None
+    posts: int
+    # False when no snapshot exists for this day. The distinction between "no
+    # growth" and "no observation" is the whole point of this field.
+    observed: bool
+
+
+@dataclass
+class FollowerSeries:
+    points: list[SeriesPoint] = field(default_factory=list)
+    daily: list[DailyPoint] = field(default_factory=list)
+    gaps: list[Gap] = field(default_factory=list)
+    provenance: Provenance = Provenance.MEASURED
+    caveats: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TopicPerformance:
+    topic: str
+    posts: int
+    median_engagement_rate: float | None
+    share_of_classified: float
+    is_reliable: bool
+
+    @property
+    def status(self) -> str:
+        if self.is_reliable:
+            return f"{self.posts} classified posts"
+        return f"only {self.posts} post(s) — not enough to rank this topic"
+
+
+@dataclass
+class TopicAnalysis:
+    topics: list[TopicPerformance] = field(default_factory=list)
+    total_posts: int = 0
+    classified_posts: int = 0
+    unclassified_posts: int = 0
+    best: str | None = None
+    worst: str | None = None
+    is_reliable: bool = False
+    # Topic labels are model output, unlike formats, which are mechanical.
+    provenance: Provenance = Provenance.INFERRED
+    caveats: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SeasonalityAnalysis:
+    follower_profile: baselines.SeasonalProfile
+    engagement_profile: baselines.SeasonalProfile
+    follower_days_observed: int = 0
+    posts_observed: int = 0
+    caveats: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DashboardSummary:
+    """The Overview headline row, assembled from one consistent read."""
+
+    followers: int | None
+    hours_of_history: int
+    posts: int
+    window_days: int
+    trend: baselines.TrendResult | None = None
+    latest_anomaly: baselines.Anomaly | None = None
+    growth_score: dict[str, Any] = field(default_factory=dict)
+
+    median_daily_change: float | None = None
+    baseline_reliable: bool = False
+    followers_change_7d: int | None = None
+    followers_change_note: str | None = None
+
+    engagement_rate_median: float | None = None
+    engagement_rate_basis: str = "NONE"
+    engagement_rate_sample: int = 0
+
+    # None, never 0: an impression total over a window where impressions were
+    # never collected is not zero impressions.
+    impressions_total: int | None = None
+    impressions_posts: int = 0
+    impressions_posts_missing: int = 0
+
+    revenue_total_minor: int = 0
+    revenue_entries: int = 0
+    revenue_currency: str = "USD"
+
+    top_post: PostPerformance | None = None
     caveats: list[str] = field(default_factory=list)
 
 
@@ -433,3 +554,301 @@ class AnalyticsService:
             ),
             "provenance": Provenance.DERIVED,
         }
+
+    # ------------------------------------------------------- follower series
+    async def follower_series(self, x_account_id: uuid.UUID, days: int = 30) -> FollowerSeries:
+        """The follower history, with its holes left as holes.
+
+        This is the series the dashboard charts, so the treatment of missing
+        data matters more than usual. A day with no snapshot yields
+        `followers=None` and `delta=None` rather than a zero, and the day
+        *after* a gap also yields `delta=None` — its change cannot be attributed
+        to one day when the intervening day was never observed. A chart fed
+        zeros would show a flat, healthy line across exactly the period where
+        collection was broken.
+        """
+        now = datetime.now(UTC)
+        since = now - timedelta(days=days)
+
+        snapshots = list(
+            await self.db.scalars(
+                select(AccountMetricSnapshot)
+                .where(
+                    AccountMetricSnapshot.x_account_id == x_account_id,
+                    AccountMetricSnapshot.captured_at >= since,
+                )
+                .order_by(AccountMetricSnapshot.captured_at)
+            )
+        )
+
+        series = FollowerSeries()
+        if not snapshots:
+            series.caveats.append(
+                "No follower snapshots in this period. X publishes no follower-history "
+                "endpoint, so this series can only start when collection did and cannot "
+                "be backfilled."
+            )
+            return series
+
+        series.points = [
+            SeriesPoint(at=_aware(row.captured_at), followers=row.followers_count)
+            for row in snapshots
+        ]
+
+        # Breaks in hourly collection, so the chart can lift its pen rather
+        # than drawing a straight line through the missing hours.
+        for previous, current in zip(series.points, series.points[1:], strict=False):
+            hours = (current.at - previous.at).total_seconds() / 3600
+            if hours > SERIES_GAP_HOURS:
+                series.gaps.append(Gap(start=previous.at, end=current.at, hours=round(hours, 1)))
+
+        by_day: dict[str, int] = {}
+        for point in series.points:
+            key = point.at.strftime("%Y-%m-%d")
+            by_day[key] = max(by_day.get(key, 0), point.followers)
+
+        posts_by_day: dict[str, int] = {}
+        for posted_at in await self.db.scalars(
+            select(Post.posted_at).where(Post.x_account_id == x_account_id, Post.posted_at >= since)
+        ):
+            posts_by_day[_aware(posted_at).strftime("%Y-%m-%d")] = (
+                posts_by_day.get(_aware(posted_at).strftime("%Y-%m-%d"), 0) + 1
+            )
+
+        # Walk the calendar, not the data, so absent days appear as absent.
+        first = series.points[0].at.date()
+        last = series.points[-1].at.date()
+        cursor = first
+        previous_key: str | None = None
+        while cursor <= last:
+            key = cursor.isoformat()
+            followers = by_day.get(key)
+            delta: float | None = None
+            if followers is not None and previous_key is not None:
+                previous_value = by_day.get(previous_key)
+                if previous_value is not None:
+                    delta = float(followers - previous_value)
+            series.daily.append(
+                DailyPoint(
+                    day=key,
+                    followers=followers,
+                    delta=delta,
+                    posts=posts_by_day.get(key, 0),
+                    observed=followers is not None,
+                )
+            )
+            previous_key = key
+            cursor += timedelta(days=1)
+
+        missing = sum(1 for d in series.daily if not d.observed)
+        if missing:
+            series.caveats.append(
+                f"{missing} day(s) in this window have no follower snapshot. They are "
+                f"drawn as breaks in the line, not as zero growth — and the day after "
+                f"each break has no attributable daily change."
+            )
+        if series.gaps:
+            longest = max(series.gaps, key=lambda g: g.hours)
+            series.caveats.append(
+                f"The longest collection gap was {longest.hours:.0f} hours, ending "
+                f"{longest.end:%Y-%m-%d %H:%M} UTC."
+            )
+
+        return series
+
+    # ------------------------------------------------------------- topics
+    async def topic_performance(self, x_account_id: uuid.UUID, days: int = 90) -> TopicAnalysis:
+        """How each topic performs, over posts the agent has classified.
+
+        Always `INFERRED`: topic labels are model output, unlike formats, which
+        are detected mechanically at collection time. The share of posts that
+        are still unclassified is reported alongside, because a comparison over
+        a third of your posts is a different claim from one over all of them.
+        """
+        since = datetime.now(UTC) - timedelta(days=days)
+        performances = await self.post_performance(x_account_id, days)
+        rate_by_post = {
+            p.post_id: p.engagement_rate.value
+            for p in performances
+            if p.engagement_rate.value is not None
+        }
+
+        rows = list(
+            await self.db.execute(
+                select(Topic.name, PostTopic.post_id)
+                .join(PostTopic, PostTopic.topic_id == Topic.id)
+                .join(Post, Post.id == PostTopic.post_id)
+                .where(Post.x_account_id == x_account_id, Post.posted_at >= since)
+            )
+        )
+
+        analysis = TopicAnalysis(total_posts=len(performances))
+        by_topic: dict[str, list[float]] = {}
+        classified: set[str] = set()
+        for name, post_id in rows:
+            classified.add(str(post_id))
+            rate = rate_by_post.get(str(post_id))
+            if rate is not None:
+                by_topic.setdefault(name, []).append(rate)
+
+        analysis.classified_posts = len(classified)
+        analysis.unclassified_posts = len(performances) - len(classified)
+
+        for name, rates in sorted(by_topic.items()):
+            analysis.topics.append(
+                TopicPerformance(
+                    topic=name,
+                    posts=len(rates),
+                    median_engagement_rate=statistics.median(rates),
+                    share_of_classified=len(rates) / max(len(classified), 1),
+                    is_reliable=len(rates) >= MIN_POSTS_PER_TOPIC,
+                )
+            )
+        analysis.topics.sort(key=lambda t: t.median_engagement_rate or 0.0, reverse=True)
+
+        reliable = [t for t in analysis.topics if t.is_reliable]
+        analysis.is_reliable = len(reliable) >= 2
+        if reliable:
+            analysis.best = reliable[0].topic
+            analysis.worst = reliable[-1].topic
+
+        if not rows:
+            analysis.caveats.append(
+                "No posts in this window have been categorised yet. Classification runs "
+                "as part of the agent cycle and needs an Anthropic API key."
+            )
+        elif not analysis.is_reliable:
+            analysis.caveats.append(
+                f"Fewer than two topics have {MIN_POSTS_PER_TOPIC}+ classified posts "
+                f"behind them, so topics cannot yet be ranked against each other."
+            )
+        if analysis.unclassified_posts:
+            analysis.caveats.append(
+                f"{analysis.unclassified_posts} of {len(performances)} posts in this "
+                f"window carry no topic, so this compares a subset rather than everything "
+                f"you posted."
+            )
+
+        return analysis
+
+    # -------------------------------------------------------- seasonality
+    async def seasonality(self, x_account_id: uuid.UUID, days: int = 90) -> SeasonalityAnalysis:
+        """Weekday rhythm, for follower change and for engagement.
+
+        Two separate profiles because they answer different questions: which
+        days you gain followers, and which days your posts land. They are
+        frequently not the same day, and averaging them together would hide
+        that.
+        """
+        series = await self.follower_series(x_account_id, days)
+        follower_observations = [
+            (datetime.fromisoformat(point.day).replace(tzinfo=UTC), point.delta)
+            for point in series.daily
+            if point.delta is not None
+        ]
+
+        performances = await self.post_performance(x_account_id, days)
+        engagement_observations = [
+            (_aware(p.posted_at), p.engagement_rate.value)
+            for p in performances
+            if p.engagement_rate.value is not None
+        ]
+
+        analysis = SeasonalityAnalysis(
+            follower_profile=baselines.compute_seasonality(
+                [(when, value) for when, value in follower_observations if value is not None]
+            ),
+            engagement_profile=baselines.compute_seasonality(
+                [(when, value) for when, value in engagement_observations if value is not None]
+            ),
+            follower_days_observed=len(follower_observations),
+            posts_observed=len(engagement_observations),
+        )
+
+        if not analysis.follower_profile.is_reliable:
+            analysis.caveats.append(
+                f"Follower rhythm needs {baselines.MIN_PER_WEEKDAY}+ observed days for each "
+                f"of at least four weekdays. That is roughly three weeks of uninterrupted "
+                f"collection."
+            )
+        if not analysis.engagement_profile.is_reliable:
+            analysis.caveats.append(
+                f"Engagement rhythm needs {baselines.MIN_PER_WEEKDAY}+ posts on each of at "
+                f"least four weekdays. Posting on only two or three days a week will never "
+                f"satisfy this, which is a fact about your schedule rather than a fault."
+            )
+
+        return analysis
+
+    # --------------------------------------------------- dashboard summary
+    async def dashboard_summary(self, x_account_id: uuid.UUID, days: int = 30) -> DashboardSummary:
+        """One call behind the Overview headline row.
+
+        Assembled here rather than by the page making six requests, so every
+        figure on that row comes from a single consistent read of the data.
+        """
+        growth = await self.growth(x_account_id, days=days)
+        performances = await self.post_performance(x_account_id, days)
+        score = await self.growth_score(x_account_id)
+
+        summary = DashboardSummary(
+            followers=growth.current_followers,
+            hours_of_history=growth.hours_of_history,
+            posts=len(performances),
+            trend=growth.trend,
+            latest_anomaly=growth.latest_anomaly,
+            growth_score=score,
+            window_days=days,
+            caveats=list(growth.caveats),
+        )
+
+        if growth.baseline is not None:
+            summary.median_daily_change = growth.baseline.median
+            summary.baseline_reliable = growth.baseline.is_reliable
+
+        recent = [delta for _day, delta in growth.daily_deltas[-7:]]
+        if len(recent) >= 7:
+            summary.followers_change_7d = int(sum(recent))
+        elif recent:
+            summary.followers_change_note = (
+                f"Only {len(recent)} day(s) of history — a seven-day change needs seven."
+            )
+
+        rates = sorted(p.engagement_rate.value for p in performances if p.engagement_rate.value)
+        if rates:
+            summary.engagement_rate_median = rates[len(rates) // 2]
+            bases = {
+                p.engagement_rate.denominator.value
+                for p in performances
+                if p.engagement_rate.value is not None
+            }
+            summary.engagement_rate_basis = bases.pop() if len(bases) == 1 else "MIXED"
+            summary.engagement_rate_sample = len(rates)
+
+        with_impressions = [p for p in performances if p.impressions is not None]
+        if with_impressions:
+            summary.impressions_total = sum(p.impressions or 0 for p in with_impressions)
+            summary.impressions_posts = len(with_impressions)
+        summary.impressions_posts_missing = len(performances) - len(with_impressions)
+        if summary.impressions_posts_missing:
+            summary.caveats.append(
+                f"{summary.impressions_posts_missing} of {len(performances)} posts have no "
+                f"impression figure, so the impression total covers only part of the window. "
+                f"They are excluded rather than counted as zero."
+            )
+
+        ranked = [p for p in performances if p.engagement_rate.value is not None]
+        if ranked:
+            summary.top_post = max(ranked, key=lambda p: p.engagement_rate.value or 0.0)
+
+        revenue_entries = list(
+            await self.db.scalars(
+                select(RevenueEntry).where(RevenueEntry.x_account_id == x_account_id)
+            )
+        )
+        summary.revenue_total_minor = sum(e.amount_minor for e in revenue_entries)
+        summary.revenue_entries = len(revenue_entries)
+        if revenue_entries:
+            summary.revenue_currency = revenue_entries[0].currency
+
+        return summary

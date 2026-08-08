@@ -1,34 +1,28 @@
 import Caveats from "@/components/Caveats";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
-import type { AttributionResponse } from "@/components/analytics";
+import RangeTabs, { parseDays } from "@/components/RangeTabs";
+import { ChartCard, GapLegend, LineChart, type Point } from "@/components/charts";
+import {
+  shortDay,
+  signed,
+  type AttributionResponse,
+  type SeasonalityProfile,
+  type SeasonalityResponse,
+  type SeriesResponse,
+  type SummaryResponse,
+} from "@/components/analytics";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
-type OverviewResponse = {
-  followers: number | null;
-  hours_of_history: number;
-  growth_baseline: {
-    median_daily: number;
-    observations: number;
-    is_reliable: boolean;
-    note: string;
-  } | null;
-  latest_anomaly: {
-    direction: string;
-    severity: string;
-    z_score: number | null;
-    explanation: string;
-  } | null;
-  trend: {
-    direction: string;
-    change_ratio: number | null;
-    explanation: string;
-    is_reliable: boolean;
-  } | null;
-  daily_deltas: [string, number][];
-  caveats: string[];
-};
+const WINDOWS = [30, 90, 180];
 
-export default async function AudiencePage() {
+export default async function AudiencePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>;
+}) {
+  const { days: rawDays } = await searchParams;
+  const days = parseDays(rawDays, 30, WINDOWS);
+
   const status = await getAccountsStatus();
   const account = status?.accounts[0];
 
@@ -40,71 +34,104 @@ export default async function AudiencePage() {
     );
   }
 
-  const [overviewResult, attributionResult] = await Promise.all([
-    apiFetch<OverviewResponse>(`/api/v1/analytics/${account.id}/overview`),
-    apiFetch<AttributionResponse>(`/api/v1/analytics/${account.id}/attribution`),
+  const [summaryResult, seriesResult, attributionResult, seasonalityResult] = await Promise.all([
+    apiFetch<SummaryResponse>(`/api/v1/analytics/${account.id}/summary?days=${days}`),
+    apiFetch<SeriesResponse>(`/api/v1/analytics/${account.id}/series?days=${days}`),
+    // The attribution model is capped at 90 days: beyond that the design
+    // matrix has more posts than the follower series can separate.
+    apiFetch<AttributionResponse>(
+      `/api/v1/analytics/${account.id}/attribution?days=${Math.min(days, 90)}`,
+    ),
+    apiFetch<SeasonalityResponse>(
+      `/api/v1/analytics/${account.id}/seasonality?days=${Math.max(days, 90)}`,
+    ),
   ]);
 
-  const overview = overviewResult.ok ? overviewResult.data : null;
+  const summary = summaryResult.ok ? summaryResult.data : null;
+  const series = seriesResult.ok ? seriesResult.data : null;
   const attribution = attributionResult.ok ? attributionResult.data : null;
+  const seasonality = seasonalityResult.ok ? seasonalityResult.data : null;
 
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Audience</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          Follower growth, what drove it, and the audience data that genuinely exists.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Audience</h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Follower growth, what drove it, and the audience data that genuinely exists.
+          </p>
+        </div>
+        <RangeTabs basePath="/audience" current={days} options={WINDOWS} />
       </header>
 
-      {overview && (
+      {/* ---------------------------------------------------- follower growth */}
+      {summary && (
         <section className="space-y-3">
           <h2 className="text-sm font-medium">Follower growth</h2>
           <div className="grid gap-4 sm:grid-cols-3">
             <Stat
               label="Followers"
-              value={overview.followers?.toLocaleString() ?? "—"}
-              note={`${overview.hours_of_history}h of history collected`}
+              value={summary.followers.value?.toLocaleString() ?? "—"}
+              note={`${summary.followers.hours_of_history}h of history collected`}
             />
             <Stat
               label="Typical daily change"
               value={
-                overview.growth_baseline?.is_reliable
-                  ? `${overview.growth_baseline.median_daily >= 0 ? "+" : ""}${overview.growth_baseline.median_daily.toFixed(0)}`
+                summary.followers.baseline_reliable &&
+                summary.followers.median_daily_change !== null
+                  ? signed(Math.round(summary.followers.median_daily_change))
                   : "—"
               }
               note={
-                overview.growth_baseline?.is_reliable
+                summary.followers.baseline_reliable
                   ? "Median, not mean — one viral day should not redefine 'normal'"
-                  : (overview.growth_baseline?.note ?? "Not enough history yet")
+                  : "Not enough history for a reliable baseline yet"
               }
             />
             <Stat
               label="Trend"
-              value={overview.trend?.is_reliable ? overview.trend.direction : "—"}
-              note={overview.trend?.explanation ?? "Needs two comparable periods"}
+              value={summary.trend?.is_reliable ? summary.trend.direction : "—"}
+              note={summary.trend?.explanation ?? "Needs two comparable periods"}
             />
           </div>
 
-          {overview.latest_anomaly && overview.latest_anomaly.direction !== "NORMAL" && (
+          {summary.latest_anomaly && summary.latest_anomaly.direction !== "NORMAL" && (
             <div
               className={`rounded-lg border px-4 py-3 text-sm ${
-                overview.latest_anomaly.direction === "SPIKE"
+                summary.latest_anomaly.direction === "SPIKE"
                   ? "border-positive/40 bg-positive/10 text-positive"
                   : "border-warning/40 bg-warning/10 text-warning"
               }`}
             >
               <strong className="capitalize">
-                {overview.latest_anomaly.direction.toLowerCase()} detected
+                {summary.latest_anomaly.direction.toLowerCase()} detected
               </strong>{" "}
-              — {overview.latest_anomaly.explanation}
+              — {summary.latest_anomaly.explanation}
             </div>
           )}
-
-          <Caveats items={overview.caveats} />
         </section>
       )}
 
+      {series && series.daily.length > 1 && (
+        <ChartCard
+          title="Follower history"
+          subtitle="X has no follower-history endpoint — this series exists only because it was collected"
+          readout={<ProvenanceBadge provenance="MEASURED" />}
+          startLabel={shortDay(series.daily[0].day)}
+          endLabel={shortDay(series.daily[series.daily.length - 1].day)}
+          footer={series.gaps.length > 0 ? <GapLegend /> : undefined}
+        >
+          <LineChart
+            points={series.daily.map((d): Point => ({ label: shortDay(d.day), value: d.followers }))}
+            height={220}
+            label="Follower count over time"
+          />
+        </ChartCard>
+      )}
+
+      {series && <Caveats items={series.caveats} />}
+
+      {/* ------------------------------------------------------- attribution */}
       {attribution && (
         <section className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -136,17 +163,13 @@ export default async function AudiencePage() {
                       <td className="px-4 py-3 text-xs text-text-muted">
                         {new Date(c.posted_at).toLocaleString()}
                       </td>
-                      <td className="numeric px-4 py-3 text-right">
-                        {c.estimate.toFixed(0)}
-                      </td>
+                      <td className="numeric px-4 py-3 text-right">{c.estimate.toFixed(0)}</td>
                       <td className="numeric px-4 py-3 text-right text-text-muted">
                         {c.ci_low.toFixed(0)} – {c.ci_high.toFixed(0)}
                       </td>
                       <td className="px-4 py-3 text-xs">
                         {c.is_distinguishable ? (
-                          <span className="text-inferred">
-                            distinguishable effect
-                          </span>
+                          <span className="text-inferred">distinguishable effect</span>
                         ) : (
                           // Deliberately not "no effect" — the data cannot show one.
                           <span className="text-text-muted">
@@ -161,8 +184,8 @@ export default async function AudiencePage() {
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-border bg-surface/50 p-5 text-sm text-text-muted">
-              Attribution is not available yet — it needs several days of hourly
-              follower history and at least two posts inside that window.
+              Attribution is not available yet — it needs several days of hourly follower
+              history and at least two posts inside that window.
             </div>
           )}
 
@@ -170,6 +193,38 @@ export default async function AudiencePage() {
         </section>
       )}
 
+      {/* ------------------------------------------------------- seasonality */}
+      {seasonality && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">Weekday rhythm</h2>
+          <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+            Two separate profiles, because they answer different questions: which days you
+            gain followers, and which days your posts land. They are often not the same day,
+            and a combined figure would hide that. A weekday with fewer than{" "}
+            {seasonality.minimum_per_weekday} observations has no median at all — it is left
+            blank rather than filled in.
+          </p>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <WeekdayProfile
+              title="Followers gained"
+              profile={seasonality.follower_change}
+              format={(v) => signed(Math.round(v))}
+              observed={`${seasonality.follower_days_observed} day(s) observed`}
+            />
+            <WeekdayProfile
+              title="Engagement rate"
+              profile={seasonality.engagement_rate}
+              format={(v) => `${(v * 100).toFixed(2)}%`}
+              observed={`${seasonality.posts_observed} post(s) observed`}
+            />
+          </div>
+
+          <Caveats items={seasonality.caveats} />
+        </section>
+      )}
+
+      {/* ------------------------------------------------------ demographics */}
       <section className="rounded-xl border border-border bg-surface p-6">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-medium">Demographics</h2>
@@ -177,14 +232,76 @@ export default async function AudiencePage() {
         </div>
         <p className="mt-3 max-w-2xl text-sm leading-relaxed text-text-muted">
           Age, gender, location and interest breakdowns are{" "}
-          <strong className="text-text">not available</strong> through the X API. X
-          removed audience analytics in 2020; estimated demographics exist only in
-          Ads Manager, behind a separate ad account and a separate API approval.
+          <strong className="text-text">not available</strong> through the X API. X removed
+          audience analytics in 2020; estimated demographics exist only in Ads Manager,
+          behind a separate ad account and a separate API approval.
         </p>
         <p className="mt-3 max-w-2xl text-sm leading-relaxed text-text-muted">
           This panel will keep saying so rather than filling the gap with guesses.
         </p>
       </section>
+    </div>
+  );
+}
+
+/**
+ * Weekday medians as a bar row.
+ *
+ * A weekday with too few observations renders as an empty slot with its reason,
+ * not as a zero-height bar — those look identical to a genuinely bad day.
+ */
+function WeekdayProfile({
+  title,
+  profile,
+  format,
+  observed,
+}: {
+  title: string;
+  profile: SeasonalityProfile;
+  format: (value: number) => string;
+  observed: string;
+}) {
+  const values = profile.days.map((d) => d.median).filter((v): v is number => v !== null);
+  const max = values.length > 0 ? Math.max(...values.map(Math.abs), 0.0001) : 1;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-medium">{title}</h3>
+        <span className={`text-xs ${profile.is_reliable ? "text-text-muted" : "text-warning"}`}>
+          {profile.is_reliable ? observed : "not enough data to read a rhythm"}
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {profile.days.map((day) => (
+          <div key={day.weekday} className="flex items-center gap-3">
+            <span className="w-24 shrink-0 text-xs text-text-muted">{day.name}</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-raised">
+              {day.median !== null && (
+                <div
+                  className={`h-full rounded-full ${
+                    day.median >= 0 ? "bg-accent" : "bg-negative"
+                  }`}
+                  style={{ width: `${Math.max(2, (Math.abs(day.median) / max) * 100)}%` }}
+                />
+              )}
+            </div>
+            <span
+              className={`numeric w-20 shrink-0 text-right text-xs ${
+                day.median === null ? "text-text-muted/60" : ""
+              }`}
+              title={
+                day.median === null
+                  ? `${day.observations} observation(s) — too few for a median`
+                  : `${day.observations} observation(s)`
+              }
+            >
+              {day.median === null ? "—" : format(day.median)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -4,7 +4,11 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 6 complete** — the agent runs. A daily eight-stage cycle
+**Current status: Phase 7 complete** — the dashboard is built out: headline metrics,
+follower and revenue charts, topic performance, weekday rhythm, and the agent's brief and
+approval queue surfaced from every page.
+
+**Phase 6** put the agent in place. A daily eight-stage cycle
 (observe, collect, analyse, reason, recommend, act, verify, report) turns the analytics
 engine's output into insights and recommendations, files anything with an outward effect
 into an approval queue, and comes back later to grade its own past advice against what
@@ -113,13 +117,15 @@ backend/
     cli.py      create-owner, check-config
   alembic/      0001 identity · 0002 OAuth + ledger · 0003 posts + snapshots ·
                 0004 revenue + topics · 0005 agent runs, insights, recommendations, actions
-  tests/        355 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+  tests/        379 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
                 probe, scheduling, collectors, analytics, attribution, CSV import,
-                agent policy, grounding, prompt fencing, executor gates, grading
+                agent policy, grounding, prompt fencing, executor gates, grading,
+                dashboard aggregates and gap handling
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
-  src/components/  ProvenanceBadge, CapabilityMatrix, CollectionHealth, Caveats
+  src/components/  ProvenanceBadge, MetricTile, charts (dependency-free SVG),
+                   CapabilityMatrix, CollectionHealth, Caveats, RangeTabs
 ```
 
 ### Security posture already in place
@@ -299,6 +305,44 @@ approving is written by the backend from the policy table, never by the model.
 finish as `PARTIAL` with the reason recorded and no new insights. Nothing crashes, and
 nothing is invented to fill the gap.
 
+### The dashboard (Phase 7)
+
+Six sections, all Server Components — the browser never talks to the backend, and the
+pages ship no JavaScript beyond the few forms that need it.
+
+**Charts are drawn as plain SVG, with no charting library.** The reason is not bundle
+size. Every charting library wants a dense array of numbers, and this dataset is not
+dense: follower history has holes wherever collection stopped, and impressions are simply
+absent for posts older than 30 days. The usual fixes — coalesce to zero, interpolate
+across — produce exactly the wrong picture, a flat and healthy-looking line across the
+period when the collector was broken. So `null` is a first-class value in
+`components/charts.tsx`: the line lifts its pen, the gap is hatched and labelled, and a bar
+with no observation is an empty slot rather than a bar of height zero.
+
+The same rule runs through the backend. `/analytics/{id}/series` walks the calendar rather
+than the data, so an unobserved day comes back as `observed: false` with a null follower
+count — and the day *after* a gap carries no daily change either, because two days of
+growth landing on one day would invent a spike that never happened.
+
+**Headline figures come from one read.** `/analytics/{id}/summary` assembles followers,
+engagement rate, impressions, revenue and the growth score server-side, so the tiles cannot
+disagree with each other the way six independent requests can when the collector writes
+between two of them. Each tile carries its own provenance badge, and a tile with nothing
+behind it says why rather than showing a zero.
+
+**Topic performance** arrives now that the agent classifies posts, and is marked
+*modelled* — unlike formats, which are detected mechanically at collection time and carry
+no classification error. The proportion of posts still unclassified is stated alongside,
+because a comparison over a third of your posts is a different claim from one over all of
+them.
+
+**Weekday rhythm** keeps two profiles apart: which days you gain followers, and which days
+your posts land. They are frequently not the same day, and a combined figure would hide
+that. A weekday with fewer than three observations has no median and is left blank.
+
+**The approval queue is visible from everywhere** — a count in the sidebar, and a card on
+the Overview. Requests expire after 24 hours, so an unanswered one is not harmless.
+
 ### Three things worth knowing about the X integration
 
 **Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
@@ -348,8 +392,8 @@ a live database.
 | 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Done |
 | 5 | Analytics engine: engagement, baselines, timing, formats, attribution, revenue | Done |
 | 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Done |
-| 7 | Full dashboard | Next |
-| 8 | Alerts and scheduled reports | |
+| 7 | Full dashboard: charts, topic performance, seasonality, approval queue | Done |
+| 8 | Alerts and scheduled reports | Next |
 | 9 | Test hardening, security review, deployment | |
 
 Collection is live as of Phase 4, so the impression dataset is accumulating from now on.

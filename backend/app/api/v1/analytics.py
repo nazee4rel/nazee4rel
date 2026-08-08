@@ -13,8 +13,10 @@ from typing import Any
 from fastapi import APIRouter, File, Query, UploadFile
 from sqlalchemy import select
 
+from app.analytics import baselines
 from app.api.deps import CurrentUser, DbSession
 from app.core.errors import NotFoundError, ValidationError
+from app.models.enums import Provenance
 from app.models.revenue import RevenueSourceType
 from app.models.x_account import XAccount
 from app.services.analytics_service import AnalyticsService
@@ -352,4 +354,203 @@ async def import_revenue_csv(
         "total_minor": result.total_minor,
         "detected_columns": result.detected_columns,
         "errors": [{"row": e.row_number, "reason": e.reason} for e in result.errors[:50]],
+    }
+
+
+@router.get("/{account_id}/summary")
+async def dashboard_summary(
+    account_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    days: int = Query(default=30, ge=7, le=365),
+) -> Any:
+    """Everything the Overview headline row needs, in one read.
+
+    Assembled server-side so the figures on that row cannot disagree with each
+    other, which they can when a page issues six requests and the collector
+    writes between two of them.
+    """
+    account = await _account(db, user, account_id)
+    summary = await AnalyticsService(db).dashboard_summary(account.id, days)
+
+    return {
+        "window_days": summary.window_days,
+        "followers": {
+            "value": summary.followers,
+            "change_7d": summary.followers_change_7d,
+            "change_note": summary.followers_change_note,
+            "median_daily_change": summary.median_daily_change,
+            "baseline_reliable": summary.baseline_reliable,
+            "hours_of_history": summary.hours_of_history,
+            "provenance": Provenance.MEASURED.value,
+        },
+        "engagement": {
+            "median_rate": summary.engagement_rate_median,
+            "basis": summary.engagement_rate_basis,
+            "sample_size": summary.engagement_rate_sample,
+            "provenance": (
+                Provenance.DERIVED.value
+                if summary.engagement_rate_median is not None
+                else Provenance.UNAVAILABLE.value
+            ),
+        },
+        "impressions": {
+            # Null rather than 0 when nothing was collected — the difference
+            # between "no reach" and "never measured" is the whole project.
+            "total": summary.impressions_total,
+            "posts_counted": summary.impressions_posts,
+            "posts_missing": summary.impressions_posts_missing,
+            "provenance": (
+                Provenance.MEASURED.value
+                if summary.impressions_total is not None
+                else Provenance.UNAVAILABLE.value
+            ),
+        },
+        "revenue": {
+            "total_minor": summary.revenue_total_minor,
+            "currency": summary.revenue_currency,
+            "entry_count": summary.revenue_entries,
+            # Never MEASURED: X publishes no creator-earnings API.
+            "provenance": Provenance.USER_ENTERED.value,
+        },
+        "posts": summary.posts,
+        "growth_score": summary.growth_score,
+        "trend": (
+            {
+                "direction": summary.trend.direction,
+                "change_ratio": summary.trend.change_ratio,
+                "explanation": summary.trend.explanation,
+                "is_reliable": summary.trend.is_reliable,
+            }
+            if summary.trend
+            else None
+        ),
+        "latest_anomaly": (
+            {
+                "direction": summary.latest_anomaly.direction.value,
+                "severity": summary.latest_anomaly.severity.value,
+                "z_score": summary.latest_anomaly.z_score,
+                "explanation": summary.latest_anomaly.explanation,
+            }
+            if summary.latest_anomaly
+            else None
+        ),
+        "top_post": (
+            {
+                "post_id": summary.top_post.post_id,
+                "x_post_id": summary.top_post.x_post_id,
+                "text": summary.top_post.text,
+                "posted_at": summary.top_post.posted_at,
+                "engagement": summary.top_post.engagement,
+                "impressions": summary.top_post.impressions,
+                "engagement_rate": _rate_payload(summary.top_post.engagement_rate),
+            }
+            if summary.top_post
+            else None
+        ),
+        "caveats": summary.caveats,
+    }
+
+
+@router.get("/{account_id}/series")
+async def follower_series(
+    account_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    days: int = Query(default=30, ge=1, le=365),
+) -> Any:
+    """The follower series for charting, with gaps preserved as gaps."""
+    account = await _account(db, user, account_id)
+    series = await AnalyticsService(db).follower_series(account.id, days)
+
+    return {
+        "provenance": series.provenance.value,
+        "points": [{"at": p.at, "followers": p.followers} for p in series.points],
+        "daily": [
+            {
+                "day": d.day,
+                "followers": d.followers,
+                "delta": d.delta,
+                "posts": d.posts,
+                # The client must not plot an unobserved day as zero.
+                "observed": d.observed,
+            }
+            for d in series.daily
+        ],
+        "gaps": [{"start": g.start, "end": g.end, "hours": g.hours} for g in series.gaps],
+        "caveats": series.caveats,
+    }
+
+
+@router.get("/{account_id}/topics")
+async def topic_performance(
+    account_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    days: int = Query(default=90, ge=7, le=365),
+) -> Any:
+    """Topic performance over posts the agent has classified."""
+    account = await _account(db, user, account_id)
+    analysis = await AnalyticsService(db).topic_performance(account.id, days)
+
+    return {
+        "topics": [
+            {
+                "topic": t.topic,
+                "posts": t.posts,
+                "median_engagement_rate": t.median_engagement_rate,
+                "share_of_classified": t.share_of_classified,
+                "is_reliable": t.is_reliable,
+                "status": t.status,
+            }
+            for t in analysis.topics
+        ],
+        "total_posts": analysis.total_posts,
+        "classified_posts": analysis.classified_posts,
+        "unclassified_posts": analysis.unclassified_posts,
+        "best": analysis.best,
+        "worst": analysis.worst,
+        "is_reliable": analysis.is_reliable,
+        "provenance": analysis.provenance.value,
+        "caveats": analysis.caveats,
+    }
+
+
+WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+@router.get("/{account_id}/seasonality")
+async def seasonality(
+    account_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    days: int = Query(default=90, ge=14, le=365),
+) -> Any:
+    """Weekday rhythm for follower change and for engagement, kept separate."""
+    account = await _account(db, user, account_id)
+    analysis = await AnalyticsService(db).seasonality(account.id, days)
+
+    def profile(p: Any) -> dict[str, Any]:
+        return {
+            "is_reliable": p.is_reliable,
+            "days": [
+                {
+                    "weekday": index,
+                    "name": WEEKDAY_NAMES[index],
+                    # Absent rather than zero where the weekday lacks enough
+                    # observations to have a median at all.
+                    "median": p.by_weekday.get(index),
+                    "observations": p.observations_by_weekday.get(index, 0),
+                }
+                for index in range(7)
+            ],
+        }
+
+    return {
+        "follower_change": profile(analysis.follower_profile),
+        "engagement_rate": profile(analysis.engagement_profile),
+        "follower_days_observed": analysis.follower_days_observed,
+        "posts_observed": analysis.posts_observed,
+        "minimum_per_weekday": baselines.MIN_PER_WEEKDAY,
+        "caveats": analysis.caveats,
     }

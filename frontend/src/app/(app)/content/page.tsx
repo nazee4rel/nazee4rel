@@ -1,49 +1,66 @@
 import Caveats, { BucketBar } from "@/components/Caveats";
-import PhaseNotice from "@/components/PhaseNotice";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
+import RangeTabs, { parseDays } from "@/components/RangeTabs";
 import {
   formatRate,
   type FormatsResponse,
   type PostRow,
   type PostsResponse,
   type TimingResponse,
+  type TopicsResponse,
 } from "@/components/analytics";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
-export default async function ContentPage() {
+const WINDOWS = [7, 30, 90];
+
+export default async function ContentPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>;
+}) {
+  const { days: rawDays } = await searchParams;
+  const days = parseDays(rawDays, 30, WINDOWS);
+
   const status = await getAccountsStatus();
   const account = status?.accounts[0];
 
   if (!account) {
-    return (
-      <EmptyState message="Connect an X account to see content analytics." />
-    );
+    return <EmptyState message="Connect an X account to see content analytics." />;
   }
 
-  const [postsResult, timingResult, formatsResult] = await Promise.all([
-    apiFetch<PostsResponse>(`/api/v1/analytics/${account.id}/posts?days=30`),
-    apiFetch<TimingResponse>(`/api/v1/analytics/${account.id}/timing`),
-    apiFetch<FormatsResponse>(`/api/v1/analytics/${account.id}/formats`),
+  // Timing and format analysis need a longer run-up than the selected window to
+  // have enough posts per bucket, so they are fetched over a wider period and
+  // say so rather than being silently restricted to it.
+  const patternDays = Math.max(days, 90);
+
+  const [postsResult, timingResult, formatsResult, topicsResult] = await Promise.all([
+    apiFetch<PostsResponse>(`/api/v1/analytics/${account.id}/posts?days=${days}`),
+    apiFetch<TimingResponse>(`/api/v1/analytics/${account.id}/timing?days=${patternDays}`),
+    apiFetch<FormatsResponse>(`/api/v1/analytics/${account.id}/formats?days=${patternDays}`),
+    apiFetch<TopicsResponse>(`/api/v1/analytics/${account.id}/topics?days=${patternDays}`),
   ]);
 
   const posts = postsResult.ok ? postsResult.data : null;
   const timing = timingResult.ok ? timingResult.data : null;
   const formats = formatsResult.ok ? formatsResult.data : null;
+  const topics = topicsResult.ok ? topicsResult.data : null;
 
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Content Analytics</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          Top posts, engagement comparison, format performance and posting-time analysis.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Content Analytics</h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Top posts, topic and format performance, and posting-time analysis.
+          </p>
+        </div>
+        <RangeTabs basePath="/content" current={days} options={WINDOWS} />
       </header>
 
       {posts && posts.total_posts === 0 ? (
-        <PhaseNotice phase={4} title="No posts collected yet">
-          Collection runs on a schedule. Once posts are discovered and snapshotted,
-          this page fills in.
-        </PhaseNotice>
+        <EmptyState
+          message={`No posts collected in the last ${days} days. Collection runs on a schedule — this page fills in as posts are discovered and snapshotted.`}
+        />
       ) : (
         posts && (
           <>
@@ -51,8 +68,7 @@ export default async function ContentPage() {
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <h2 className="text-sm font-medium">Best performing</h2>
                 <p className="text-xs text-text-muted">
-                  Ranked by engagement rate across {posts.comparable_posts} comparable
-                  posts
+                  Ranked by engagement rate across {posts.comparable_posts} comparable posts
                   {posts.excluded_no_impressions > 0 &&
                     ` · ${posts.excluded_no_impressions} excluded for having no impressions`}
                 </p>
@@ -70,10 +86,72 @@ export default async function ContentPage() {
         )
       )}
 
+      {/* ----------------------------------------------------------- topics */}
+      {topics && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-sm font-medium">Topic performance</h2>
+            <ProvenanceBadge provenance="INFERRED" />
+            {topics.best && (
+              <p className="text-xs text-text-muted">
+                Best: <span className="text-positive">{topics.best}</span>
+                {topics.worst && topics.worst !== topics.best && (
+                  <>
+                    {" · "}Weakest: <span className="text-warning">{topics.worst}</span>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
+          <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+            Topics are assigned by the agent from a taxonomy you control, so unlike the
+            formats below they carry classification error — that is what the{" "}
+            <em>modelled</em> badge means. The taxonomy is deliberately closed: free-form
+            labels drift between runs, and the moment they do, comparing topics across
+            periods stops meaning anything.
+            {topics.classified_posts > 0 && (
+              <>
+                {" "}
+                Covering {topics.classified_posts} of {topics.total_posts} posts in the last{" "}
+                {patternDays} days.
+              </>
+            )}
+          </p>
+
+          {topics.topics.length > 0 ? (
+            <div className="space-y-2 rounded-xl border border-border bg-surface p-5">
+              {topics.topics.map((topic) => (
+                <BucketBar
+                  key={topic.topic}
+                  label={topic.topic}
+                  value={topic.median_engagement_rate ?? 0}
+                  max={Math.max(
+                    ...topics.topics.map((t) => t.median_engagement_rate ?? 0),
+                    0.0001,
+                  )}
+                  sampleSize={topic.posts}
+                  isReliable={topic.is_reliable}
+                  status={topic.status}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border bg-surface/50 p-5 text-sm text-text-muted">
+              No posts have been categorised yet. Classification runs as part of the agent
+              cycle — start one from the AI Insights page.
+            </div>
+          )}
+          <Caveats items={topics.caveats} />
+        </section>
+      )}
+
+      {/* ---------------------------------------------------------- formats */}
       {formats && (
         <section className="space-y-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-sm font-medium">Format performance</h2>
+            <ProvenanceBadge provenance="DERIVED" />
             {formats.best && (
               <p className="text-xs text-text-muted">
                 Best: <span className="text-positive">{formats.best}</span>
@@ -85,6 +163,10 @@ export default async function ContentPage() {
               </p>
             )}
           </div>
+          <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+            Media, links, threads and length are detected mechanically at collection time,
+            so these groupings need no model and carry no classification error.
+          </p>
           {formats.groups.length > 0 ? (
             <div className="space-y-2 rounded-xl border border-border bg-surface p-5">
               {formats.groups.map((group) => (
@@ -106,14 +188,15 @@ export default async function ContentPage() {
         </section>
       )}
 
+      {/* ----------------------------------------------------------- timing */}
       {timing && (
         <section className="space-y-3">
           <h2 className="text-sm font-medium">Posting time</h2>
           <div className="rounded-xl border border-border bg-surface p-5">
             <p className="text-sm leading-relaxed">{timing.recommendation}</p>
             <p className="mt-1 text-xs text-text-muted">
-              Hours shown in {timing.timezone}, your local time — a recommendation in
-              UTC would be useless.
+              Hours shown in {timing.timezone}, your local time — a recommendation in UTC
+              would be useless. Based on {timing.total_posts} posts over {patternDays} days.
             </p>
             {timing.by_hour.length > 0 && (
               <div className="mt-4 space-y-2">
@@ -134,13 +217,6 @@ export default async function ContentPage() {
           <Caveats items={timing.caveats} />
         </section>
       )}
-
-      <PhaseNotice phase={6} title="Topic analysis">
-        Topics need classification against a controlled taxonomy, which is the one
-        part of the analytics engine that requires a model. It arrives with the
-        agent in Phase&nbsp;6 — formats above are detected mechanically and need
-        no model at all.
-      </PhaseNotice>
     </div>
   );
 }

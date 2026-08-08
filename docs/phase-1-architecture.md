@@ -541,6 +541,40 @@ reasoning step being available today.
 
 ---
 
+## 11. Phase 7 as built — the dashboard
+
+The interesting decisions in this phase are all about the same thing: charts want dense
+arrays, and this data is not dense.
+
+**Null is a value the chart renders, not a value it fills in.** `components/charts.tsx`
+takes `(number | null)[]`. A null breaks the line, shades a hatched band over the missing
+span, and draws an empty slot rather than a zero-height bar. Every charting library would
+have wanted the holes filled first, which is why there is no charting library here — a
+flat line across a collection outage is a worse lie than a visible gap, because it looks
+like data.
+
+**The series endpoint walks the calendar, not the rows.** `/analytics/{id}/series` iterates
+every date in the window and reports `observed: false` for dates with no snapshot. The day
+*after* a gap also reports a null change: attributing two days of growth to one day would
+manufacture a spike. §4.4's "gaps render as gaps" is enforced here rather than left to the
+client.
+
+**The headline row is one query.** `/analytics/{id}/summary` exists because six independent
+requests can disagree with each other when the collector writes between two of them, and a
+dashboard whose tiles contradict each other is worse than a slow one.
+
+**Two functions written in Phase 5 finally have callers.** `compute_seasonality` and the
+weekday profile were built with the analytics engine and left unused until there was a
+surface for them. They now back the Audience page's weekday rhythm, split into separate
+follower and engagement profiles rather than one combined figure.
+
+**Topic performance is marked INFERRED, formats are DERIVED.** Both are group comparisons
+that look identical on screen, so the provenance badge is doing real work: formats are
+mechanical facts about a post, topics are model output with classification error, and the
+share of posts still unclassified is stated next to the comparison.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)
