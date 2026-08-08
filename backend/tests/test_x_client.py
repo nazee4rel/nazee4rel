@@ -113,10 +113,23 @@ class TestEndpointRegistry:
         for endpoint in ep.REGISTRY.values():
             assert endpoint.cost_class in ep.CostClass
 
-    def test_own_data_endpoints_are_owned_reads(self) -> None:
+    def test_own_data_reads_are_owned_reads(self) -> None:
         """Owned Reads bill at a fifth of the general rate; misclassifying costs money."""
         for endpoint in ep.REGISTRY.values():
-            assert endpoint.cost_class is ep.CostClass.OWNED_READ
+            if endpoint.method is ep.HttpMethod.GET:
+                assert endpoint.cost_class is ep.CostClass.OWNED_READ
+
+    def test_the_only_write_endpoint_is_post_creation(self) -> None:
+        """Nothing in this system deletes or edits anything on X.
+
+        The guarantee is structural: the client refuses any endpoint absent from
+        the registry, so an absent delete endpoint is an unimplementable action
+        rather than a discouraged one.
+        """
+        writes = [e for e in ep.REGISTRY.values() if e.method is not ep.HttpMethod.GET]
+        assert [e.key for e in writes] == ["tweets.create"]
+        assert ep.CREATE_TWEET.required_scopes == ("tweet.write", "tweet.read", "users.read")
+        assert ep.CREATE_TWEET.capability is XCapability.WRITE_POSTS
 
     def test_uncertain_endpoint_is_flagged(self) -> None:
         """Sources conflict on the followers list, so it must not claim to be verified."""

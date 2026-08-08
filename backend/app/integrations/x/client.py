@@ -179,6 +179,7 @@ class XApiClient:
         *,
         path_params: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
         expected_resources: int = 1,
         bypass_capability_check: bool = False,
     ) -> XResponse:
@@ -234,13 +235,14 @@ class XApiClient:
                 endpoint=endpoint.key,
             )
 
-        return await self._send_with_retry(endpoint, path_params or {}, params or {})
+        return await self._send_with_retry(endpoint, path_params or {}, params or {}, json_body)
 
     async def _send_with_retry(
         self,
         endpoint: ep.Endpoint,
         path_params: dict[str, str],
         params: dict[str, Any],
+        json_body: dict[str, Any] | None = None,
     ) -> XResponse:
         url = endpoint.url(self.settings.x_api_base_url, **path_params)
         account_id = str(self.account.id)
@@ -256,6 +258,7 @@ class XApiClient:
                     endpoint.method.value,
                     url,
                     params=params or None,
+                    json=json_body,
                     headers={
                         "Authorization": f"Bearer {token}",
                         "User-Agent": "x-account-intelligence-agent/0.3",
@@ -282,7 +285,8 @@ class XApiClient:
             await self.limiter.record(account_id, endpoint.key, rl)
 
             # --- success -------------------------------------------------
-            if response.status_code == 200:
+            # 201 as well as 200: creating a post returns Created.
+            if response.status_code in (200, 201):
                 body = self._json(response)
                 data = body.get("data")
                 resources = count_resources(data)
@@ -290,7 +294,7 @@ class XApiClient:
                     endpoint,
                     x_account_id=self.account.id,
                     resources_returned=resources,
-                    status_code=200,
+                    status_code=response.status_code,
                     latency_ms=latency_ms,
                     rate_limit_remaining=rl.remaining,
                     rate_limit_reset_at=rl.reset_at,
@@ -302,7 +306,7 @@ class XApiClient:
                     meta=body.get("meta") or {},
                     errors=errors if isinstance(errors, list) else [],
                     resources_returned=resources,
-                    status_code=200,
+                    status_code=response.status_code,
                 )
 
             # --- failure -------------------------------------------------

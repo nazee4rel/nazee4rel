@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # Verify against your developer dashboard; they are rates, not constants.
     x_cost_owned_read_micros: int = 1_000
     x_cost_general_read_micros: int = 5_000
+    # X's pay-per-use pricing is documented for reads; post creation is not
+    # clearly priced. Zero by default so the ledger does not assert a figure we
+    # could not verify — set it from your invoice if writes are billed.
+    x_cost_write_micros: int = 0
 
     # OAuth handshake state lifetime. Short, because a pending authorization is
     # an unused credential sitting in the database.

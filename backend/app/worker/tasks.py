@@ -186,6 +186,102 @@ def backfill_account(account_id: str) -> dict[str, Any]:
     return run_async(_run())
 
 
+@celery_app.task(name="agent.daily_cycle")
+def agent_daily_cycle() -> dict[str, Any]:
+    """One full agent cycle per account.
+
+    Daily rather than hourly on purpose. The metrics this reasons about move on
+    the scale of days, an hourly cycle would pay for a model call to conclude
+    nothing has changed, and a recommendation cannot be graded until enough time
+    has passed for the answer to mean anything.
+    """
+
+    async def _run() -> dict[str, Any]:
+        from app.agent.loop import AgentLoop
+        from app.models.agent import AgentRunTrigger
+
+        summary: dict[str, Any] = {"accounts": 0, "runs": [], "failed": 0}
+        async with session_scope() as db:
+            account_ids = await active_account_ids(db)
+        summary["accounts"] = len(account_ids)
+
+        for account_id in account_ids:
+            # A session per account, as elsewhere: one account's failure must
+            # not roll back another's insights.
+            try:
+                async with session_scope() as db:
+                    account = await db.get(XAccount, account_id)
+                    if account is None:
+                        continue
+                    run = await AgentLoop(db, account).run(trigger=AgentRunTrigger.SCHEDULED)
+                    summary["runs"].append(
+                        {
+                            "account": account.username,
+                            "status": run.status.value,
+                            "insights": run.insights_created,
+                            "recommendations": run.recommendations_created,
+                            "actions": run.actions_created,
+                            "rejected_citations": run.grounding_rejections,
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                summary["failed"] += 1
+                log.exception("agent.cycle_failed", account_id=str(account_id), error=str(exc))
+
+        log.info(
+            "agent.daily_cycle.completed",
+            accounts=summary["accounts"],
+            failed=summary["failed"],
+        )
+        return summary
+
+    return run_async(_run())
+
+
+@celery_app.task(name="agent.expire_approvals")
+def agent_expire_approvals() -> dict[str, Any]:
+    """Lapse approval requests nobody answered.
+
+    A pending action is not inert while it waits: approving one days later would
+    act on analysis that has since been superseded. Runs on its own schedule so
+    the queue stays honest even if no agent cycle runs.
+    """
+
+    async def _run() -> dict[str, Any]:
+        from app.agent.executor import ActionExecutor
+
+        expired = 0
+        async with session_scope() as db:
+            for account_id in await active_account_ids(db):
+                account = await db.get(XAccount, account_id)
+                if account is not None:
+                    expired += await ActionExecutor(db, account).expire_stale()
+        return {"expired": expired}
+
+    return run_async(_run())
+
+
+@celery_app.task(name="agent.verify_predictions")
+def agent_verify_predictions() -> dict[str, Any]:
+    """Grade recommendations whose verification date has arrived.
+
+    Also runs inside the daily cycle. It has its own schedule because grading is
+    the part that makes the advice accountable, and it should not stop happening
+    just because the reasoning step is unavailable or the budget is exhausted.
+    """
+
+    async def _run() -> dict[str, Any]:
+        from app.agent.verification import VerificationService
+
+        graded = 0
+        async with session_scope() as db:
+            for account_id in await active_account_ids(db):
+                graded += len(await VerificationService(db).grade_due(account_id))
+        return {"graded": graded}
+
+    return run_async(_run())
+
+
 @celery_app.task(name="maintenance.stale_account_check")
 def stale_account_check() -> dict[str, Any]:
     """Flag accounts whose collection has silently stopped.

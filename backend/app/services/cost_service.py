@@ -62,6 +62,8 @@ class CostService:
             return 0
         if cost_class is CostClass.OWNED_READ:
             return self.settings.x_cost_owned_read_micros
+        if cost_class is CostClass.WRITE:
+            return self.settings.x_cost_write_micros
         return self.settings.x_cost_general_read_micros
 
     def estimate_micros(self, endpoint: Endpoint, expected_resources: int) -> int:

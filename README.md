@@ -4,11 +4,16 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 5 complete** — the analytics engine is live. Engagement rates
-with explicit denominators, robust baselines and anomaly detection, format and
-posting-time analysis, follower attribution with confidence intervals, and revenue with
-CSV import. All deterministic — the model interprets these outputs in Phase 6; it never
-computes them.
+**Current status: Phase 6 complete** — the agent runs. A daily eight-stage cycle
+(observe, collect, analyse, reason, recommend, act, verify, report) turns the analytics
+engine's output into insights and recommendations, files anything with an outward effect
+into an approval queue, and comes back later to grade its own past advice against what
+actually happened.
+
+The model interprets numbers; it never computes them. Every claim it makes has to cite the
+exact figures it rests on, and those citations are checked against the data before the
+claim is stored — an item quoting a figure the evidence does not contain is discarded, not
+corrected.
 
 Read [`docs/phase-1-architecture.md`](docs/phase-1-architecture.md) first. It documents the
 X API constraints that shape everything else, and three of them are load-bearing:
@@ -102,16 +107,19 @@ backend/
     collectors/ snapshot schedule, payload parsing, the collectors themselves
     analytics/  engagement metrics, robust baselines, follower attribution,
                 timing/format patterns, revenue analytics — all pure functions
+    agent/      policy (the allowlist and autonomy tiers), evidence, prompts,
+                grounding, the eight-stage loop, the executor, verification
     worker/     Celery app and the beat schedule
     cli.py      create-owner, check-config
   alembic/      0001 identity · 0002 OAuth + ledger · 0003 posts + snapshots ·
-                0004 revenue + topics
-  tests/        286 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
-                probe, scheduling, collectors, analytics, attribution, CSV import
+                0004 revenue + topics · 0005 agent runs, insights, recommendations, actions
+  tests/        355 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+                probe, scheduling, collectors, analytics, attribution, CSV import,
+                agent policy, grounding, prompt fencing, executor gates, grading
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
-  src/components/  ProvenanceBadge, CapabilityMatrix, PhaseNotice
+  src/components/  ProvenanceBadge, CapabilityMatrix, CollectionHealth, Caveats
 ```
 
 ### Security posture already in place
@@ -221,6 +229,76 @@ so re-importing a statement adds nothing rather than doubling your totals. Rows 
 read are reported individually — never coerced to zero. RPM is computed only where both
 revenue and impressions exist, and suppressed otherwise.
 
+### The agent (Phase 6)
+
+The agent is not a chat window over the database. It runs on a schedule with nobody
+watching, decides for itself whether there is anything worth reasoning about, and records
+what it concluded and why.
+
+**One cycle, eight stages.** Observe (budget and collection health) → Collect (top up if
+stale and affordable) → Analyse (classify topics, build the evidence bundle) → Reason (one
+model call) → Recommend (verify citations, store) → Act (execute T0, queue the rest) →
+Verify (grade predictions now due) → Report. Each stage's timing and outcome is stored on
+the run, so "the agent stopped" resolves to a specific stage rather than a shrug.
+
+**It is allowed to decide there is nothing to say.** Under three analysed posts or two days
+of follower history, the run finishes as `SKIPPED` without calling the model. Reasoning
+over four data points produces confident nonsense and charges you for it.
+
+**Claims are grounded, and that is enforced after the fact.** The model gets a flat
+dictionary of facts computed by the analytics engine — no tools, no database, no ability to
+go and look something up. Every insight must cite the keys *and values* it relied on, and
+each citation is compared against the bundle before anything is stored. A real key with a
+wrong number fails. A number supplied for something the evidence marks unavailable fails,
+which is the specific case that matters most: X publishes no creator-earnings API, so an
+invented revenue figure is caught rather than published. The stored figures are then taken
+from the evidence, not from the reply.
+
+**Recommendations are predictions.** Each one names a metric the system can re-measure, a
+direction, and a date after which it can fairly be graded. The baseline is measured by the
+system at proposal time — a model-supplied baseline would be marking its own homework. A
+later run grades it CONFIRMED, REFUTED or INCONCLUSIVE, and those grades are fed back into
+subsequent prompts. Advice you dismissed is never REFUTED: what happened afterwards cannot
+score something nobody acted on.
+
+**Topics are a closed taxonomy.** The model may assign from your list and *suggest*
+additions; adding one is an approval. Free-form labels drift between runs — this week's
+"AI tooling" is next week's "developer tools" — and the moment they do, comparing topic
+performance across periods stops meaning anything, which is the only reason to categorise
+posts at all.
+
+### What the agent can and cannot do
+
+`app/agent/policy.py` is the whole security boundary, deliberately short enough to read.
+Every action carries a tier, and the tier — not the model's confidence — decides what
+happens:
+
+| Tier | Meaning | Actions |
+|---|---|---|
+| T0 | Runs unattended, no outward effect | record note, raise alert, draft post |
+| T1 | Queued for your approval | propose a topic |
+| T2 | Queued for approval, visible on X once approved | publish post |
+| T3 | Never executed — not implemented anywhere | delete, edit, follow, DM, spend |
+
+T3 is not a setting you could turn on. Deleting a post, following an account, sending a DM
+and spending money have no implementation in this codebase, and the X client refuses any
+endpoint absent from its registry — so the absence *is* the guarantee. The single
+outward-facing endpoint is post creation, reachable only via an approved T2 action with
+`X_ENABLE_WRITE_ACTIONS` on; with it off, `tweet.write` is never requested, so the stored
+token could not authorise a post even if every other control failed.
+
+**Prompt injection.** Post text is fenced in a per-run nonce block and any literal fence
+syntax inside it is stripped first, so content cannot close a fence it cannot predict. But
+delimiters are not the control that matters — the model holds no tools, returns
+schema-validated data, and the executor dispatches only on enum members from a closed
+allowlist. A run that read unauthored text is flagged, and that flag is shown on the
+approval screen so you know what you are looking at. The description of the action you are
+approving is written by the backend from the policy table, never by the model.
+
+**Without an API key**, the agent still collects, analyses, verifies and reports. Runs
+finish as `PARTIAL` with the reason recorded and no new insights. Nothing crashes, and
+nothing is invented to fill the gap.
+
 ### Three things worth knowing about the X integration
 
 **Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
@@ -269,8 +347,8 @@ a live database.
 | 3 | X OAuth 2.0 + PKCE, API client, cost ledger, capability probe | Done |
 | 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Done |
 | 5 | Analytics engine: engagement, baselines, timing, formats, attribution, revenue | Done |
-| 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Next |
-| 7 | Full dashboard | |
+| 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Done |
+| 7 | Full dashboard | Next |
 | 8 | Alerts and scheduled reports | |
 | 9 | Test hardening, security review, deployment | |
 

@@ -500,6 +500,47 @@ the compensating controls are explicit:
 
 ---
 
+## 10. Phase 6 as built — where the implementation refines this document
+
+Four things were decided during implementation that this document did not settle, and one
+was tightened.
+
+**The untrusted-content flag covers all unauthored text, not only third-party text.**
+§9 flags drafts produced from runs that ingested "replies or quote-posts". As built, the
+flag is set whenever *any* free text this system did not author enters the prompt — which
+today means the account's own post text. The vector is not really "whose account posted
+it": a transcribed screenshot, a pasted reply, or a compromised account all arrive as your
+own post text. Replies and quote-posts, when Phase 8 ingests them, then need no change
+here. The flag never blocks a T0 action (a note with no outward effect is not a risk); it
+marks the run and every action from it, and the approval screen shows it.
+
+**Publishing cannot be reached by a single model output.** `PUBLISH_POST` is absent from
+the set of actions the structured-output schema allows the model to propose. Publishing is
+reachable only by a human promoting a draft. This is narrower than §9's "drafted by the
+agent, queued, published on approval" and costs nothing, since the draft still comes from
+the agent.
+
+**Insights carry verified figures, not quoted ones.** §2's provenance model says values
+declare where they came from. The agent adds a second check: an insight must cite its
+figures by key *and* value, the pair is compared against the run's evidence bundle, and a
+mismatch discards the whole item rather than trimming the bad citation. The stored value is
+then read from the evidence, never from the model's reply. Rejections are counted per run —
+a rising count is a real signal about the model or the prompt.
+
+**Writes get their own cost class.** X documents read pricing in detail and post creation
+far less clearly. Rather than assert a rate the ledger could not support, `CostClass.WRITE`
+bills at `X_COST_WRITE_MICROS`, which defaults to zero and is set from your invoice. The
+ledger records the call either way.
+
+**Verification refuses to grade advice you dismissed.** §4.5 describes recommendations as
+falsifiable predictions graded later. As built, a dismissed recommendation grades
+INCONCLUSIVE, never REFUTED — scoring unfollowed advice would corrupt the feedback loop in
+whichever direction the account happened to move. Grading also runs on its own schedule,
+separate from the daily cycle, so accountability for past advice does not depend on the
+reasoning step being available today.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)

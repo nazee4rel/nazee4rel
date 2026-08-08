@@ -7,6 +7,24 @@ avoiding by convention.
 """
 
 from app.db.base import Base
+from app.models.agent import (
+    ActionStatus,
+    ActionType,
+    AgentAction,
+    AgentRun,
+    AgentRunStatus,
+    AgentRunTrigger,
+    AgentStage,
+    AutonomyTier,
+    Insight,
+    InsightKind,
+    InsightSeverity,
+    PredictedDirection,
+    PredictedMetric,
+    Recommendation,
+    RecommendationStatus,
+    VerificationResult,
+)
 from app.models.audit import AuditLog, SystemLog
 from app.models.collection import CollectionKind, CollectionRun, CollectionStatus
 from app.models.content import (
@@ -39,9 +57,17 @@ from app.models.x_account import AccountCapability, OAuthToken, XAccount
 __all__ = [
     "AccountCapability",
     "AccountMetricSnapshot",
+    "ActionStatus",
+    "ActionType",
+    "AgentAction",
+    "AgentRun",
+    "AgentRunStatus",
+    "AgentRunTrigger",
+    "AgentStage",
     "ApiUsageLedger",
     "AuditAction",
     "AuditLog",
+    "AutonomyTier",
     "Base",
     "Campaign",
     "CampaignStatus",
@@ -49,13 +75,20 @@ __all__ = [
     "CollectionKind",
     "CollectionRun",
     "CollectionStatus",
+    "Insight",
+    "InsightKind",
+    "InsightSeverity",
     "OAuthState",
     "OAuthToken",
     "Post",
     "PostMetricSnapshot",
     "PostTopic",
     "PostType",
+    "PredictedDirection",
+    "PredictedMetric",
     "Provenance",
+    "Recommendation",
+    "RecommendationStatus",
     "RevenueAttribution",
     "RevenueEntry",
     "RevenueSourceType",
@@ -65,6 +98,7 @@ __all__ = [
     "Topic",
     "User",
     "UserRole",
+    "VerificationResult",
     "XAccount",
     "XCapability",
 ]

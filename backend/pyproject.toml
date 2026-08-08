@@ -34,6 +34,8 @@ dependencies = [
     # constrained least-squares fit for follower attribution.
     "numpy>=2.1.0",
     "scipy>=1.14.0",
+    # The agent's reasoning, topic classification and structured outputs.
+    "anthropic>=0.75.0",
 ]
 
 [project.optional-dependencies]

@@ -47,6 +47,10 @@ EXPECTED_TABLES = {
     "revenue_attributions",
     "topics",
     "post_topics",
+    "agent_runs",
+    "insights",
+    "recommendations",
+    "agent_actions",
 }
 
 

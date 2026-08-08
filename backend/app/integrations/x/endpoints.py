@@ -33,6 +33,11 @@ class CostClass(enum.StrEnum):
     OWNED_READ = "OWNED_READ"
     GENERAL_READ = "GENERAL_READ"
     FREE = "FREE"  # OAuth token operations are not metered reads
+    # Writes. X's pay-per-use documentation covers read pricing in detail and is
+    # far less clear about posts; the rate is therefore a configurable setting
+    # (X_COST_WRITE_MICROS) defaulting to zero rather than a guess baked into
+    # the code. Set it from your invoice if writes turn out to be billed.
+    WRITE = "WRITE"
 
 
 class HttpMethod(enum.StrEnum):
@@ -142,8 +147,22 @@ USER_BOOKMARKS = Endpoint(
     "class we expect; reconcile against your invoice.",
 )
 
+CREATE_TWEET = Endpoint(
+    key="tweets.create",
+    method=HttpMethod.POST,
+    path="/2/tweets",
+    cost_class=CostClass.WRITE,
+    required_scopes=("tweet.write", "tweet.read", "users.read"),
+    capability=XCapability.WRITE_POSTS,
+    notes="The only endpoint in this application that changes anything on X. It is "
+    "reachable solely through an approved T2 agent action, and only when "
+    "X_ENABLE_WRITE_ACTIONS is true — with the flag off, `tweet.write` is never "
+    "requested, so the stored token cannot authorise this call at all. There is "
+    "deliberately no delete or edit counterpart.",
+)
+
 REGISTRY: dict[str, Endpoint] = {
-    e.key: e for e in (ME, USER_TWEETS, USER_FOLLOWERS, USER_LIKED, USER_BOOKMARKS)
+    e.key: e for e in (ME, USER_TWEETS, USER_FOLLOWERS, USER_LIKED, USER_BOOKMARKS, CREATE_TWEET)
 }
 
 

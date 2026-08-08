@@ -81,4 +81,21 @@ celery_app.conf.beat_schedule = {
         "task": "maintenance.stale_account_check",
         "schedule": crontab(minute="45"),
     },
+    # The agent cycle. Once a day, early enough that a morning report has
+    # something to say — the metrics it reasons about move on the scale of
+    # days, so a tighter cadence would pay for model calls to observe noise.
+    "agent-daily-cycle": {
+        "task": "agent.daily_cycle",
+        "schedule": crontab(hour="6", minute="15"),
+    },
+    # Grading runs separately as well, so accountability for past advice does
+    # not depend on the reasoning step being available today.
+    "agent-verify-predictions": {
+        "task": "agent.verify_predictions",
+        "schedule": crontab(hour="7", minute="5"),
+    },
+    "agent-expire-approvals": {
+        "task": "agent.expire_approvals",
+        "schedule": crontab(minute="10"),
+    },
 }
