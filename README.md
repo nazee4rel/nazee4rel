@@ -4,10 +4,11 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 4 complete** — scheduled collection is running. Follower counts
-are snapshotted hourly, posts are discovered and their metrics captured on a decaying
-cadence, and every post gets a mandatory capture before its 30-day metrics window closes.
-The dataset is now accumulating. Turning it into analytics is Phase 5.
+**Current status: Phase 5 complete** — the analytics engine is live. Engagement rates
+with explicit denominators, robust baselines and anomaly detection, format and
+posting-time analysis, follower attribution with confidence intervals, and revenue with
+CSV import. All deterministic — the model interprets these outputs in Phase 6; it never
+computes them.
 
 Read [`docs/phase-1-architecture.md`](docs/phase-1-architecture.md) first. It documents the
 X API constraints that shape everything else, and three of them are load-bearing:
@@ -99,11 +100,14 @@ backend/
     api/v1/     health, auth, accounts, x_oauth routers
     integrations/x/  endpoint registry, OAuth+PKCE, API client, rate limiting, capability probe
     collectors/ snapshot schedule, payload parsing, the collectors themselves
+    analytics/  engagement metrics, robust baselines, follower attribution,
+                timing/format patterns, revenue analytics — all pure functions
     worker/     Celery app and the beat schedule
     cli.py      create-owner, check-config
-  alembic/      0001 identity · 0002 OAuth state + usage ledger · 0003 posts + snapshots
-  tests/        178 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
-                probe, snapshot scheduling, parsing, collectors
+  alembic/      0001 identity · 0002 OAuth + ledger · 0003 posts + snapshots ·
+                0004 revenue + topics
+  tests/        286 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+                probe, scheduling, collectors, analytics, attribution, CSV import
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
@@ -171,6 +175,52 @@ Posts already past 30 days when you connect are recorded with their impressions 
 **unavailable, not zero** — they were never obtainable, which is a different fact from a
 collection failure, and the dashboard says so.
 
+### The analytics engine (Phase 5)
+
+Deterministic and testable, with no model involved. Three principles run through it.
+
+**Every rate reports its denominator.** "Engagement rate" is not one number —
+per-impression and per-follower can tell opposite stories about the same post.
+Impressions are preferred; where they were never collected the per-follower fallback is
+used and *labelled*, and where neither exists the rate is `UNAVAILABLE`, never `0%`.
+
+**Baselines use the median and MAD, never the mean.** A single viral post is exactly the
+event worth noticing, and it would drag a mean-based baseline up for weeks — quietly
+raising the bar so the next spike goes unflagged. The median barely moves. The account is
+always compared against itself; there are no global benchmarks here.
+
+**Nothing is recommended off a thin sample.** Posting-time and format analysis gate every
+bucket on sample size, so the "post at 3am on Tuesdays" failure mode — a recommendation
+resting on two lucky posts — is structurally prevented rather than hoped against.
+
+#### Follower attribution
+
+The interesting one. X exposes a follower *count* and no follower *event stream*, so
+"which post gained me followers" cannot be measured by anyone, at any access level. It is
+modelled: hourly follower deltas are deconvolved against each post's decaying response
+curve via ridge-regularised non-negative least squares, with confidence intervals from
+bootstrapped residuals.
+
+What makes it trustworthy is what it refuses to do. Below three days of hourly history it
+declines outright rather than fitting noise. Posts published within hours of each other
+produce near-identical response curves, so it reports them as inseparable instead of
+picking a winner. Growth it cannot explain is reported as unexplained rather than
+attributed to something. Every output carries `INFERRED` and renders differently from
+measured data.
+
+Validated against synthetic data with known drivers: it recovers a planted 900-follower
+bump as 913 and a 120 bump as 110, while correctly declining to credit the posts that
+drove nothing.
+
+#### Revenue
+
+X has no creator-earnings API, so every figure is `USER_ENTERED` or `IMPORTED`. The CSV
+importer detects columns under their common aliases, parses currency symbols, thousands
+separators, European decimal commas and parenthesised negatives, and fingerprints each row
+so re-importing a statement adds nothing rather than doubling your totals. Rows it cannot
+read are reported individually — never coerced to zero. RPM is computed only where both
+revenue and impressions exist, and suppressed otherwise.
+
 ### Three things worth knowing about the X integration
 
 **Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
@@ -218,8 +268,8 @@ a live database.
 | 2 | Project structure, backend, database, authentication | Done |
 | 3 | X OAuth 2.0 + PKCE, API client, cost ledger, capability probe | Done |
 | 4 | Collectors, Celery schedule, snapshot pipeline, cost governor | Done |
-| 5 | Analytics engine: engagement, baselines, topics, timing, attribution | Next |
-| 6 | Agent loop, Claude structured outputs, recommendations, verification | |
+| 5 | Analytics engine: engagement, baselines, timing, formats, attribution, revenue | Done |
+| 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Next |
 | 7 | Full dashboard | |
 | 8 | Alerts and scheduled reports | |
 | 9 | Test hardening, security review, deployment | |

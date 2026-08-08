@@ -41,6 +41,12 @@ EXPECTED_TABLES = {
     "post_metric_snapshots",
     "account_metric_snapshots",
     "collection_runs",
+    "campaigns",
+    "sponsorships",
+    "revenue_entries",
+    "revenue_attributions",
+    "topics",
+    "post_topics",
 }
 
 

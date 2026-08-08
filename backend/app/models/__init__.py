@@ -22,6 +22,16 @@ from app.models.enums import (
     UserRole,
     XCapability,
 )
+from app.models.revenue import (
+    Campaign,
+    CampaignStatus,
+    PostTopic,
+    RevenueAttribution,
+    RevenueEntry,
+    RevenueSourceType,
+    Sponsorship,
+    Topic,
+)
 from app.models.usage import ApiUsageLedger, OAuthState
 from app.models.user import Session, User
 from app.models.x_account import AccountCapability, OAuthToken, XAccount
@@ -33,6 +43,8 @@ __all__ = [
     "AuditAction",
     "AuditLog",
     "Base",
+    "Campaign",
+    "CampaignStatus",
     "CapabilityStatus",
     "CollectionKind",
     "CollectionRun",
@@ -41,10 +53,16 @@ __all__ = [
     "OAuthToken",
     "Post",
     "PostMetricSnapshot",
+    "PostTopic",
     "PostType",
     "Provenance",
+    "RevenueAttribution",
+    "RevenueEntry",
+    "RevenueSourceType",
     "Session",
+    "Sponsorship",
     "SystemLog",
+    "Topic",
     "User",
     "UserRole",
     "XAccount",

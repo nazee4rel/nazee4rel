@@ -28,6 +28,7 @@ from app.worker.celery_app import celery_app
 
 log = get_logger(__name__)
 
+
 def run_async[T](coro: Awaitable[T]) -> T:
     """Bridge Celery's synchronous worker into the async codebase.
 

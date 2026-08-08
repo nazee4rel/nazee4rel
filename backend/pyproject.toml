@@ -30,6 +30,10 @@ dependencies = [
     "python-multipart>=0.0.12",
     "typer>=0.13.0",
     "celery[redis]>=5.4.0",
+    # The analytics engine is genuinely statistical: robust baselines, and a
+    # constrained least-squares fit for follower attribution.
+    "numpy>=2.1.0",
+    "scipy>=1.14.0",
 ]
 
 [project.optional-dependencies]
