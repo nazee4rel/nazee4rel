@@ -157,11 +157,16 @@ def _action_out(action: AgentAction) -> ActionOut:
 
 # ------------------------------------------------------------------- policy
 @router.get("/policy", response_model=dict)
-async def autonomy_policy() -> dict[str, Any]:
-    """What the agent is allowed to do. Public to any signed-in surface.
+async def autonomy_policy(user: CurrentUser) -> dict[str, Any]:
+    """What the agent is allowed to do.
 
     Exposed as an endpoint so the dashboard renders the live policy rather than
-    a hand-maintained copy of it that can drift from the code that enforces it.
+    a hand-maintained copy that can drift from the code enforcing it.
+
+    Authenticated even though it discloses nothing sensitive — the contents are
+    a description of what this system refuses to do. Every other endpoint
+    requires a session, and an endpoint that does not is the kind of exception
+    that gets copied.
     """
     return {
         "tiers": {

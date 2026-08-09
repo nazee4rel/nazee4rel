@@ -80,6 +80,15 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    # A caller may hand us a live connection through `config.attributes`, which
+    # is how the Postgres test suite runs the real migrations against a database
+    # it already owns. Without this branch env.py would always open its own
+    # engine from settings, and the migrations could only ever be exercised
+    # against whatever DATABASE_URL happened to be configured.
+    injected = config.attributes.get("connection")
+    if injected is not None:
+        do_run_migrations(injected)
+        return
     asyncio.run(run_async_migrations())
 
 

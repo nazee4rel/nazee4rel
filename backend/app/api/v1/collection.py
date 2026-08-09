@@ -246,7 +246,12 @@ async def cost_projection(account_id: uuid.UUID, user: CurrentUser, db: DbSessio
 
 
 @router.get("/kinds", response_model=dict)
-async def collection_kinds() -> dict[str, list[str]]:
+async def collection_kinds(user: CurrentUser) -> dict[str, list[str]]:
+    """Enum values for the dashboard's filters.
+
+    Authenticated for consistency rather than secrecy: see the note on
+    `/agent/policy`.
+    """
     return {
         "kinds": [k.value for k in CollectionKind],
         "statuses": [s.value for s in CollectionStatus],

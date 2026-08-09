@@ -611,6 +611,44 @@ built in Phase 6 is already in place for when it arrives.
 
 ---
 
+## 13. Phase 9 as built — hardening, review and deployment
+
+**The migrations had never been run by PostgreSQL.** `test_migration_parity.py` replays
+them against a recorder, which catches drift from the models but cannot catch SQL that does
+not execute. Phase 9 added a suite that builds the database by running the migrations
+against a real server, diffs the resulting schema against the ORM column by column, and
+executes the full downgrade-and-upgrade cycle — a path this document had claimed was
+reversible since Phase 2 without anyone having tried it. It works, and now it is checked.
+`alembic/env.py` gained support for an injected connection so the migrations can be driven
+programmatically rather than only from a URL.
+
+**The security review is a test file, not a document.** §6 lists controls; a list is true
+on the day it is written. `tests/test_security.py` enumerates the live application and
+asserts that every route requires a session or is declared public with a reason, that every
+account-scoped handler filters on the session user, and that every `Settings` field whose
+name looks like a secret is in the log scrubber. Those assertions fail the build rather
+than ageing quietly.
+
+**Three findings, all fixed.** The worst was structural rather than subtle:
+`TrustedHostMiddleware` was configured with `FRONTEND_ORIGIN`, a URL, while a `Host` header
+carries no scheme — production would have rejected every request. It survived eight phases
+because no test ran with `ENVIRONMENT=production`. The other two were a log scrubber that
+did not recurse into nested context dictionaries, and two endpoints that skipped the
+session dependency.
+
+**Deployment is a separate compose file, not a flag.** The development stack mounts source,
+reloads, and publishes Postgres and Redis to the host — all correct for development and all
+wrong for production. `docker-compose.prod.yml` has none of it, runs migrations in a
+dedicated container that completes before anything else starts, pins `beat` to one replica,
+and publishes only the frontend on loopback for a TLS-terminating proxy to sit in front of.
+
+**Backups are treated as a first-class operational concern**, because §1.4's "no historical
+backfill" means a lost database is a permanently lost account history. `make backup` and
+`make restore` exist, the deployment guide leads with what is being protected and why, and
+`backups/` is in `.gitignore`.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)

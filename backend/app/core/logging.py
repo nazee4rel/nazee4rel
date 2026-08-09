@@ -35,9 +35,42 @@ _SENSITIVE_KEYS = {
     "code_verifier",
     "session_token",
     "totp_secret",
+    "smtp_password",
+    "postgres_password",
+    "token_encryption_key",
+    "client_secret",
 }
 
 _REDACTED = "***redacted***"
+# Bound on recursion, so a cyclic structure cannot hang a log call.
+_MAX_DEPTH = 6
+
+
+def _scrub_value(value: Any, depth: int) -> Any:
+    """Redact secret-shaped keys at any depth.
+
+    Recursion matters here. Structured context is routinely nested — audit
+    entries carry a `context` dict, collection results carry per-account
+    dictionaries, and an exception logged with its arguments can nest several
+    levels. A top-level-only scrubber redacts `refresh_token=...` and then
+    prints the same value one level down inside `context`.
+
+    Depth is bounded so a cyclic or pathologically nested structure cannot turn
+    a log line into a hang.
+    """
+    if depth > _MAX_DEPTH:
+        return value
+    if isinstance(value, dict):
+        return {
+            key: _REDACTED
+            if isinstance(key, str) and key.lower() in _SENSITIVE_KEYS
+            else _scrub_value(item, depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        cleaned = [_scrub_value(item, depth + 1) for item in value]
+        return type(value)(cleaned) if isinstance(value, tuple) else cleaned
+    return value
 
 
 def scrub_secrets(
@@ -46,6 +79,8 @@ def scrub_secrets(
     for key in list(event_dict.keys()):
         if key.lower() in _SENSITIVE_KEYS:
             event_dict[key] = _REDACTED
+        else:
+            event_dict[key] = _scrub_value(event_dict[key], 0)
     return event_dict
 
 

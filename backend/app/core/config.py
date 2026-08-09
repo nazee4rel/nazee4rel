@@ -52,8 +52,14 @@ class Settings(BaseSettings):
     # --- Redis --------------------------------------------------------------
     redis_url: str = "redis://redis:6379/0"
 
-    # --- CORS ---------------------------------------------------------------
+    # --- CORS and host validation -------------------------------------------
     frontend_origin: str = "http://localhost:3000"
+
+    # Hostnames this API will answer to, comma-separated. Host *names*, not
+    # URLs: the Host header carries no scheme, so passing an origin here
+    # rejects every request. Required in production, where an empty value would
+    # otherwise disable the check silently.
+    allowed_hosts: str = ""
 
     # --- X API (Phase 3+) ---------------------------------------------------
     x_client_id: str = ""
@@ -128,6 +134,17 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
+    def allowed_host_list(self) -> list[str]:
+        """Hostnames for TrustedHostMiddleware.
+
+        Outside production an empty value means "accept anything", which is what
+        you want when the host is `localhost`, `127.0.0.1`, a container name and
+        a LAN address depending on who is calling.
+        """
+        hosts = [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
+        return hosts or ["*"]
+
+    @property
     def encryption_key_bytes(self) -> bytes:
         return base64.urlsafe_b64decode(self.token_encryption_key)
 
@@ -169,6 +186,17 @@ class Settings(BaseSettings):
             problems.append("COOKIE_SECURE must be true in production")
         if self.frontend_origin.startswith("http://"):
             problems.append("FRONTEND_ORIGIN must use HTTPS in production")
+        if not [h for h in self.allowed_hosts.split(",") if h.strip()]:
+            problems.append(
+                "ALLOWED_HOSTS must list the hostnames this API answers to "
+                "(e.g. api.example.com,backend). Host headers carry no scheme, so a "
+                "URL here would reject every request"
+            )
+        elif any("://" in h for h in self.allowed_hosts.split(",")):
+            problems.append(
+                "ALLOWED_HOSTS must contain hostnames, not URLs — a Host header never "
+                "includes a scheme, so an entry like https://api.example.com can never match"
+            )
         if problems:
             raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self

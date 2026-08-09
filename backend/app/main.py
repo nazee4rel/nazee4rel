@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app import __version__
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import AppError, app_error_handler, unhandled_error_handler
@@ -39,11 +40,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="X Account Intelligence Agent",
-    description=(
-        "Agentic monitoring and analysis for a single X/Twitter account. "
-        "Phase 2: foundation, database and authentication."
-    ),
-    version="0.2.0",
+    description="Agentic monitoring and analysis for a single X/Twitter account.",
+    version=__version__,
     lifespan=lifespan,
     # Interactive docs are useful locally and an unnecessary disclosure in prod.
     docs_url=None if settings.is_production else "/docs",
@@ -51,8 +49,12 @@ app = FastAPI(
     openapi_url=None if settings.is_production else "/openapi.json",
 )
 
+# Host header validation. `allowed_host_list` holds host *names* — an origin
+# would never match, because a Host header carries no scheme, and the mistake is
+# invisible until production rejects every request. The production validator in
+# Settings refuses to boot without real hostnames here.
 if settings.is_production:
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[settings.frontend_origin])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
 
 # The browser never calls this API directly — Next.js proxies server-side — but
 # CORS stays locked to the known origin so a stray direct call from a hostile
@@ -97,4 +99,4 @@ app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)
 async def root() -> dict[str, str]:
-    return {"service": "x-account-intelligence-agent", "version": "0.2.0", "phase": "2"}
+    return {"service": "x-account-intelligence-agent", "version": __version__}

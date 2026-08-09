@@ -9,7 +9,7 @@ packages = ["app"]
 
 [project]
 name = "xagent-backend"
-version = "0.2.0"
+version = "1.0.0"
 description = "Agentic X/Twitter account intelligence — backend"
 requires-python = ">=3.12"
 
@@ -46,6 +46,8 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
     "aiosqlite>=0.20.0",
+    # Dependency CVE audit, run by `make audit`.
+    "pip-audit>=2.7.0",
 ]
 
 [tool.pytest.ini_options]

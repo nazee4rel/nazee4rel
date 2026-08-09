@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import __version__
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.integrations.x import endpoints as ep
@@ -261,7 +262,7 @@ class XApiClient:
                     json=json_body,
                     headers={
                         "Authorization": f"Bearer {token}",
-                        "User-Agent": "x-account-intelligence-agent/0.3",
+                        "User-Agent": f"x-account-intelligence-agent/{__version__}",
                     },
                 )
             except httpx.HTTPError as exc:

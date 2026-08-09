@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   reactStrictMode: true,
+  // Produces a self-contained server bundle with only the modules actually
+  // imported, so the production image ships neither the source tree nor the
+  // full node_modules.
+  output: "standalone",
   // The browser never calls FastAPI directly. Every request goes through this
   // app's own /api routes, which run server-side, so the session cookie stays
   // same-origin and no backend URL, X token or Anthropic key is ever present in

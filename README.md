@@ -4,10 +4,14 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 8 complete** — alerts and scheduled reports. Ten deterministic
-rules watch for growth spikes and drops, breakout posts, engagement decline, revenue
-movement, unusual churn, and the operational failures that lose data; daily, weekly and
-monthly reports are generated and emailed.
+**Current status: complete (v1.0.0).** All nine phases are built. Phase 9 hardened the
+tests against real PostgreSQL, turned the security review into an executable test suite,
+and added a production deployment.
+
+**Phase 8** added alerts and scheduled reports. Ten deterministic rules watch for growth
+spikes and drops, breakout posts, engagement decline, revenue movement, unusual churn, and
+the operational failures that lose data; daily, weekly and monthly reports are generated
+and emailed.
 
 **Phase 7** built out the dashboard: headline metrics, follower and revenue charts, topic
 performance, weekday rhythm, and the agent's brief and approval queue surfaced from every
@@ -35,6 +39,22 @@ X API constraints that shape everything else, and three of them are load-bearing
   is a core component.
 - **Follower attribution is inference, not measurement.** X exposes no follower-event
   stream, so "which post gained me followers" is modelled and labelled as such.
+
+## Deploying
+
+For production, see [`docs/deployment.md`](docs/deployment.md) — configuration, TLS,
+backups, monitoring, upgrades and key rotation. The short version:
+
+```bash
+make setup                  # generates real secrets into .env
+$EDITOR .env                # set ALLOWED_HOSTS, FRONTEND_ORIGIN, X credentials
+make prod-up                # migrations run to completion before anything else starts
+make backup                 # then put this on a cron job, off the machine
+```
+
+**Back it up.** Impressions past 30 days and the entire follower series exist in your
+database and nowhere else — not in X's API, not in X's dashboard, not for any amount of
+money. That is the one operational fact that makes this system different from most.
 
 ## Quick start
 
@@ -125,11 +145,12 @@ backend/
   alembic/      0001 identity · 0002 OAuth + ledger · 0003 posts + snapshots ·
                 0004 revenue + topics · 0005 agent runs, insights, recommendations,
                 actions · 0006 alert rules, alerts, reports, deliveries
-  tests/        426 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+  tests/        492 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
                 probe, scheduling, collectors, analytics, attribution, CSV import,
                 agent policy, grounding, prompt fencing, executor gates, grading,
                 dashboard aggregates and gap handling, alert dedupe/cooldown/
-                resolution, report coverage
+                resolution, report coverage, the security review, the scheduled
+                jobs, and a PostgreSQL-only pass
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
@@ -399,6 +420,66 @@ one covering all seven unless it says so. Re-running a period amends the stored 
 rather than producing a second one. Email is plain `smtplib`, off unless configured, and
 recipients are redacted in the delivery log.
 
+### Testing, and what SQLite cannot tell you (Phase 9)
+
+492 tests. The default run is in-memory SQLite: fast, hermetic, no containers. But SQLite
+is quietly wrong about four things this system depends on, so there is a second pass:
+
+```bash
+createdb xagent_test
+TEST_POSTGRES_URL='postgresql+asyncpg://postgres@localhost/xagent_test' pytest
+```
+
+That pass builds the database **by running the migrations**, not by `create_all` — creating
+the schema from the models would test the models against themselves and could never catch
+a migration that does not run. It then checks:
+
+- the live schema matches the ORM, column by column, including nullability;
+- `JSONB` columns really are JSONB (`.with_variant()` degrades to `JSON` on SQLite, so
+  nothing else in the suite proves the production type);
+- datetimes come back timezone-aware, which is what every `_aware()` helper in this
+  codebase is compensating for — if Postgres were also naive, those helpers would be hiding
+  a bug rather than a test artifact;
+- two concurrent transactions racing for the same snapshot row: one commits, one gets an
+  `IntegrityError`. SQLite serialises writers, so no other test can demonstrate that the
+  collector's idempotency actually rests on the database;
+- the full `downgrade` to base and back up again. Postgres keeps enum types after their
+  tables are dropped, so a downgrade that forgets them breaks the next upgrade. Until this
+  existed, the rollback path had been asserted for eight phases and never executed.
+
+### The security review, as tests
+
+`tests/test_security.py` is the review. A document would have been true the day it was
+written; these fail the build the day someone adds a route without an authorisation check.
+
+The centrepiece enumerates the live application: every route either requires a session, or
+appears in `PUBLIC_ROUTES` with a written reason. There is no third option, so a new
+endpoint cannot slip through by not being on anyone's checklist. Another test drives the
+same inventory to confirm a valid session gets a 404 on someone else's account, so
+cross-account coverage extends itself to new endpoints automatically.
+
+It also derives expectations from the code rather than restating them: every field in
+`Settings` whose name looks like a secret must appear in the log scrubber's redaction list
+— the check that would have caught the SMTP password added in Phase 8.
+
+Three real findings came out of it, all fixed:
+
+1. **`TrustedHostMiddleware` was being fed the frontend *origin*.** A `Host` header carries
+   no scheme, so `https://app.example.com` could never match one: production would have
+   rejected every request with 400. Invisible for eight phases because nothing ran in
+   production mode. Now `ALLOWED_HOSTS` takes hostnames, the production validator refuses
+   to boot without them and rejects a URL with an explanatory message, and a test boots the
+   app in production mode to prove the right `Host` is accepted and a wrong one is not.
+2. **The log scrubber did not recurse.** It redacted `refresh_token` at the top level and
+   printed the same value one level down inside a `context` dict — which is exactly how
+   audit entries and collection results are shaped. Now depth-bounded and recursive.
+3. **Two endpoints were unauthenticated.** Neither disclosed anything sensitive, but an
+   endpoint that skips the session dependency is the kind of exception that gets copied.
+
+Dependency audits are clean: `pip-audit` reports nothing, and `npm audit` went from three
+high-severity `sharp`/`postcss` advisories to zero, pinned via overrides rather than a
+Next.js major bump — with the build verified after.
+
 ### Three things worth knowing about the X integration
 
 **Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
@@ -433,10 +514,12 @@ npm install
 npm run typecheck && npm run build
 ```
 
-The backend test suite runs against SQLite because Phase 2 uses no Postgres-specific SQL.
-`tests/test_migration_parity.py` replays the migration against a recorder and diffs the
-result against the ORM metadata, so model/migration drift fails the suite without needing
-a live database.
+The suite runs on in-memory SQLite and needs no containers.
+`tests/test_migration_parity.py` replays every migration against a recorder and diffs the
+result against the ORM metadata, so model/migration drift fails the suite without a live
+database.
+
+A second pass covers what SQLite cannot — see below.
 
 ## Roadmap
 
@@ -450,7 +533,7 @@ a live database.
 | 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Done |
 | 7 | Full dashboard: charts, topic performance, seasonality, approval queue | Done |
 | 8 | Alerts and scheduled reports | Done |
-| 9 | Test hardening, security review, deployment | Next |
+| 9 | Test hardening, security review, deployment | Done |
 
 Collection is live as of Phase 4, so the impression dataset is accumulating from now on.
 Everything from here builds on that history rather than racing it.
