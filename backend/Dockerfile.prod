@@ -1,0 +1,53 @@
+# Production image for the API, worker and scheduler.
+#
+# Two stages: the builder carries the compilers needed to build asyncpg,
+# argon2-cffi and cryptography wheels; the runtime carries only the resulting
+# virtualenv. Dev extras (pytest, ruff, mypy) are not installed at all — a
+# production container has no business being able to run the test suite.
+
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --upgrade pip && pip install .
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# curl is kept for the healthcheck; no compilers reach the runtime image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
+
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/api/v1/health/live || exit 1
+
+# No --reload. Workers are processes rather than threads because the collectors
+# are I/O-bound and each holds its own database pool.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

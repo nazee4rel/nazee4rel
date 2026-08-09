@@ -1,0 +1,139 @@
+# Production stack.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Differences from the development compose that matter:
+#
+#   * No source mounts and no --reload. The image is the artifact; a container
+#     that reloads from a mounted directory is not the thing you tested.
+#   * Postgres and Redis publish no host ports. They are reachable only on the
+#     internal network, so the database is not exposed by a firewall mistake.
+#   * Migrations run once in their own container rather than in each service's
+#     entrypoint. Three services racing `alembic upgrade head` on startup is a
+#     lock contention bug waiting to happen.
+#   * Exactly one beat container. Two schedulers would double every collection
+#     job — and double the API bill.
+#   * Restart policies everywhere, because a stopped worker is not a cosmetic
+#     outage: impressions missed inside the 30-day window cannot be re-fetched.
+
+name: xagent-prod
+
+x-backend-image: &backend-image
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.prod
+  env_file: .env
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Bind-mounted so `make backup` writes somewhere you can find it.
+      - ./backups:/backups
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  redis:
+    image: redis:7-alpine
+    # Append-only so a restart does not lose the refresh lock or the rate-limit
+    # windows. Neither is precious, but losing them mid-refresh is not free.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+
+  # Runs to completion before anything else starts, so no service ever comes up
+  # against a schema it does not expect.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    env_file: .env
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    <<: *backend-image
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Collection. Failing to run this is the one outage that loses data
+  # permanently rather than temporarily.
+  worker:
+    <<: *backend-image
+    command: celery -A app.worker.celery_app worker --loglevel=warning --concurrency=2
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Exactly one. Two beats double every job and every invoice.
+  beat:
+    <<: *backend-image
+    command: celery -A app.worker.celery_app beat --loglevel=warning
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 512m
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    environment:
+      NODE_ENV: production
+      BACKEND_INTERNAL_URL: http://backend:8000
+    restart: unless-stopped
+    # The only port published to the host. Put a TLS-terminating reverse proxy
+    # in front of this — the app sets HSTS but cannot terminate TLS itself.
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  postgres-data:
+  redis-data:

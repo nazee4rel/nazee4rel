@@ -467,6 +467,188 @@ and 5 are the ones where a wrong assumption costs rework.
 
 ---
 
+## 9. Decisions taken (answers to §8)
+
+| # | Decision | Consequence for the build |
+|---|---|---|
+| 1 | **X API access: unknown** | Design for pay-per-use (the only option for new developers since Feb 2026). The Phase 3 capability probe determines the true state on connection; billing mode is a config value, not an assumption. |
+| 2 | API budget | Default ceiling **$25/month**, configurable. Governor degradation ladder as §4.3. |
+| 3 | Account size | Assume ~5 posts/day for schedule sizing; tunable. |
+| 4 | **Autonomy: posting with approval (T1)** | We request `tweet.write` **in addition to** the read scopes. Posting is drafted by the agent, queued, and published only on explicit human approval with 24h expiry. T2 and T3 restrictions are unchanged — no spending, no deletion, no follows, no DMs. |
+| 5 | **Tenancy: single user, one X account** | Single-tenant deployment on a multi-tenant-ready schema (`user_id`/`x_account_id` scoping is present from the start so it never needs retrofitting). RBAC kept minimal. |
+| 6 | **Revenue: CSV import** | CSV import with column mapping and dedupe is the primary ingest path. A minimal manual entry/edit form ships alongside it — imported rows need correction, and sponsorship/brand-deal revenue has no statement to import. |
+| 7 | Alert channels | Default to email + dashboard; channel adapters are pluggable in Phase 8. |
+
+### Security consequences of decision 4
+
+Granting `tweet.write` is the single largest increase in blast radius in this design, so
+the compensating controls are explicit:
+
+- The write scope is **requested but disabled by default** via a config flag. Enabling it
+  is a deliberate, audited action, not a deployment default.
+- No post is ever published without a human approving that specific draft. Approvals do
+  not batch and do not carry over between drafts.
+- Approvals expire after 24h, so a stale queue cannot publish something later made
+  irrelevant or wrong by events.
+- Any draft produced by a run that ingested third-party text (replies, quote-posts) is
+  flagged as such in the approval UI — that is the prompt-injection path, and it is
+  surfaced rather than hidden.
+- Every publish is written to `agent_actions` and `audit_logs` with the approving user,
+  the source run, and the exact payload.
+- `tweet.moderate.write`, `follows.write`, `like.write` and DM scopes are **never**
+  requested, so T3 actions remain technically impossible regardless of any other failure.
+
+---
+
+## 10. Phase 6 as built — where the implementation refines this document
+
+Four things were decided during implementation that this document did not settle, and one
+was tightened.
+
+**The untrusted-content flag covers all unauthored text, not only third-party text.**
+§9 flags drafts produced from runs that ingested "replies or quote-posts". As built, the
+flag is set whenever *any* free text this system did not author enters the prompt — which
+today means the account's own post text. The vector is not really "whose account posted
+it": a transcribed screenshot, a pasted reply, or a compromised account all arrive as your
+own post text. Replies and quote-posts, when Phase 8 ingests them, then need no change
+here. The flag never blocks a T0 action (a note with no outward effect is not a risk); it
+marks the run and every action from it, and the approval screen shows it.
+
+**Publishing cannot be reached by a single model output.** `PUBLISH_POST` is absent from
+the set of actions the structured-output schema allows the model to propose. Publishing is
+reachable only by a human promoting a draft. This is narrower than §9's "drafted by the
+agent, queued, published on approval" and costs nothing, since the draft still comes from
+the agent.
+
+**Insights carry verified figures, not quoted ones.** §2's provenance model says values
+declare where they came from. The agent adds a second check: an insight must cite its
+figures by key *and* value, the pair is compared against the run's evidence bundle, and a
+mismatch discards the whole item rather than trimming the bad citation. The stored value is
+then read from the evidence, never from the model's reply. Rejections are counted per run —
+a rising count is a real signal about the model or the prompt.
+
+**Writes get their own cost class.** X documents read pricing in detail and post creation
+far less clearly. Rather than assert a rate the ledger could not support, `CostClass.WRITE`
+bills at `X_COST_WRITE_MICROS`, which defaults to zero and is set from your invoice. The
+ledger records the call either way.
+
+**Verification refuses to grade advice you dismissed.** §4.5 describes recommendations as
+falsifiable predictions graded later. As built, a dismissed recommendation grades
+INCONCLUSIVE, never REFUTED — scoring unfollowed advice would corrupt the feedback loop in
+whichever direction the account happened to move. Grading also runs on its own schedule,
+separate from the daily cycle, so accountability for past advice does not depend on the
+reasoning step being available today.
+
+---
+
+## 11. Phase 7 as built — the dashboard
+
+The interesting decisions in this phase are all about the same thing: charts want dense
+arrays, and this data is not dense.
+
+**Null is a value the chart renders, not a value it fills in.** `components/charts.tsx`
+takes `(number | null)[]`. A null breaks the line, shades a hatched band over the missing
+span, and draws an empty slot rather than a zero-height bar. Every charting library would
+have wanted the holes filled first, which is why there is no charting library here — a
+flat line across a collection outage is a worse lie than a visible gap, because it looks
+like data.
+
+**The series endpoint walks the calendar, not the rows.** `/analytics/{id}/series` iterates
+every date in the window and reports `observed: false` for dates with no snapshot. The day
+*after* a gap also reports a null change: attributing two days of growth to one day would
+manufacture a spike. §4.4's "gaps render as gaps" is enforced here rather than left to the
+client.
+
+**The headline row is one query.** `/analytics/{id}/summary` exists because six independent
+requests can disagree with each other when the collector writes between two of them, and a
+dashboard whose tiles contradict each other is worse than a slow one.
+
+**Two functions written in Phase 5 finally have callers.** `compute_seasonality` and the
+weekday profile were built with the analytics engine and left unused until there was a
+surface for them. They now back the Audience page's weekday rhythm, split into separate
+follower and engagement profiles rather than one combined figure.
+
+**Topic performance is marked INFERRED, formats are DERIVED.** Both are group comparisons
+that look identical on screen, so the provenance badge is doing real work: formats are
+mechanical facts about a post, topics are model output with classification error, and the
+share of posts still unclassified is stated next to the comparison.
+
+---
+
+## 12. Phase 8 as built — alerts and reports
+
+§4.5 and §9 called for alerts on growth, engagement, revenue and suspicious activity, with
+email and dashboard channels. As built, four things are sharper than that description.
+
+**Alert fatigue is treated as the primary failure mode.** Dedupe keys, per-rule cooldowns
+and a severity floor are in the schema, not in the detectors, and the dedupe key is a unique
+constraint so the guarantee does not depend on the service remembering to check. Most of
+the detector code is refusal logic.
+
+**Stateful and point-in-time rules are distinguished.** Operational conditions
+(collection stopped, budget exhausted, access degraded, freeze at risk) end, and close
+themselves when the detector stops seeing them. Statistical observations do not end and
+never resolve. Conflating the two produces either a banner that sticks or a problem that
+can be clicked away while it is still happening — so `acknowledge` deliberately does not
+resolve.
+
+**"Suspicious activity" is scoped to what the data supports.** X exposes no follower-event
+stream, so `UNUSUAL_CHURN` reports the timing of an unusual net loss and states in its body
+that a bot purge, a bad post and a compromised account are indistinguishable from here.
+Claiming to detect compromise would have been the dishonest option.
+
+**No model is involved.** §4.5 places alerting after the agent in the loop, which invited
+using the agent to write them. Alerts run on their own 30-minute schedule with no LLM call,
+so they keep working when the Anthropic key is missing, the budget is exhausted or the
+model is refusing — which are precisely the conditions under which you most want to hear
+from the system.
+
+**Reply and quote-post ingestion is deferred, not forgotten.** Earlier notes anticipated it
+landing here as the first genuinely attacker-controlled text. It is a collection feature
+rather than an alerting one: it costs money per resource, needs a mention-timeline endpoint
+this registry does not yet declare, and none of the ten rules needs it. The prompt fencing
+built in Phase 6 is already in place for when it arrives.
+
+---
+
+## 13. Phase 9 as built — hardening, review and deployment
+
+**The migrations had never been run by PostgreSQL.** `test_migration_parity.py` replays
+them against a recorder, which catches drift from the models but cannot catch SQL that does
+not execute. Phase 9 added a suite that builds the database by running the migrations
+against a real server, diffs the resulting schema against the ORM column by column, and
+executes the full downgrade-and-upgrade cycle — a path this document had claimed was
+reversible since Phase 2 without anyone having tried it. It works, and now it is checked.
+`alembic/env.py` gained support for an injected connection so the migrations can be driven
+programmatically rather than only from a URL.
+
+**The security review is a test file, not a document.** §6 lists controls; a list is true
+on the day it is written. `tests/test_security.py` enumerates the live application and
+asserts that every route requires a session or is declared public with a reason, that every
+account-scoped handler filters on the session user, and that every `Settings` field whose
+name looks like a secret is in the log scrubber. Those assertions fail the build rather
+than ageing quietly.
+
+**Three findings, all fixed.** The worst was structural rather than subtle:
+`TrustedHostMiddleware` was configured with `FRONTEND_ORIGIN`, a URL, while a `Host` header
+carries no scheme — production would have rejected every request. It survived eight phases
+because no test ran with `ENVIRONMENT=production`. The other two were a log scrubber that
+did not recurse into nested context dictionaries, and two endpoints that skipped the
+session dependency.
+
+**Deployment is a separate compose file, not a flag.** The development stack mounts source,
+reloads, and publishes Postgres and Redis to the host — all correct for development and all
+wrong for production. `docker-compose.prod.yml` has none of it, runs migrations in a
+dedicated container that completes before anything else starts, pins `beat` to one replica,
+and publishes only the frontend on loopback for a TLS-terminating proxy to sit in front of.
+
+**Backups are treated as a first-class operational concern**, because §1.4's "no historical
+backfill" means a lost database is a permanently lost account history. `make backup` and
+`make restore` exist, the deployment guide leads with what is being protected and why, and
+`backups/` is in `.gitignore`.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)

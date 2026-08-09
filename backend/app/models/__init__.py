@@ -1,0 +1,128 @@
+"""Model registry.
+
+Alembic autogenerate only sees tables whose modules have been imported, so every
+model module must be re-exported here. A model missing from this list produces a
+migration that silently drops nothing and creates nothing — a failure mode worth
+avoiding by convention.
+"""
+
+from app.db.base import Base
+from app.models.agent import (
+    ActionStatus,
+    ActionType,
+    AgentAction,
+    AgentRun,
+    AgentRunStatus,
+    AgentRunTrigger,
+    AgentStage,
+    AutonomyTier,
+    Insight,
+    InsightKind,
+    InsightSeverity,
+    PredictedDirection,
+    PredictedMetric,
+    Recommendation,
+    RecommendationStatus,
+    VerificationResult,
+)
+from app.models.alerting import (
+    Alert,
+    AlertRule,
+    AlertRuleKey,
+    AlertSeverity,
+    AlertState,
+    Delivery,
+    DeliveryChannel,
+    DeliveryStatus,
+    Report,
+    ReportPeriod,
+    ReportStatus,
+)
+from app.models.audit import AuditLog, SystemLog
+from app.models.collection import CollectionKind, CollectionRun, CollectionStatus
+from app.models.content import (
+    AccountMetricSnapshot,
+    Post,
+    PostMetricSnapshot,
+    PostType,
+)
+from app.models.enums import (
+    AuditAction,
+    CapabilityStatus,
+    Provenance,
+    UserRole,
+    XCapability,
+)
+from app.models.revenue import (
+    Campaign,
+    CampaignStatus,
+    PostTopic,
+    RevenueAttribution,
+    RevenueEntry,
+    RevenueSourceType,
+    Sponsorship,
+    Topic,
+)
+from app.models.usage import ApiUsageLedger, OAuthState
+from app.models.user import Session, User
+from app.models.x_account import AccountCapability, OAuthToken, XAccount
+
+__all__ = [
+    "AccountCapability",
+    "AccountMetricSnapshot",
+    "ActionStatus",
+    "ActionType",
+    "AgentAction",
+    "AgentRun",
+    "AgentRunStatus",
+    "AgentRunTrigger",
+    "AgentStage",
+    "Alert",
+    "AlertRule",
+    "AlertRuleKey",
+    "AlertSeverity",
+    "AlertState",
+    "ApiUsageLedger",
+    "AuditAction",
+    "AuditLog",
+    "AutonomyTier",
+    "Base",
+    "Campaign",
+    "CampaignStatus",
+    "CapabilityStatus",
+    "CollectionKind",
+    "CollectionRun",
+    "CollectionStatus",
+    "Delivery",
+    "DeliveryChannel",
+    "DeliveryStatus",
+    "Insight",
+    "InsightKind",
+    "InsightSeverity",
+    "OAuthState",
+    "OAuthToken",
+    "Post",
+    "PostMetricSnapshot",
+    "PostTopic",
+    "PostType",
+    "PredictedDirection",
+    "PredictedMetric",
+    "Provenance",
+    "Recommendation",
+    "RecommendationStatus",
+    "Report",
+    "ReportPeriod",
+    "ReportStatus",
+    "RevenueAttribution",
+    "RevenueEntry",
+    "RevenueSourceType",
+    "Session",
+    "Sponsorship",
+    "SystemLog",
+    "Topic",
+    "User",
+    "UserRole",
+    "VerificationResult",
+    "XAccount",
+    "XCapability",
+]
