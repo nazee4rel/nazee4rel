@@ -8,6 +8,7 @@ in production rather than silently running on a guessable key.
 from __future__ import annotations
 
 import base64
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -18,9 +19,22 @@ Environment = Literal["development", "staging", "production"]
 BillingMode = Literal["pay_per_use", "legacy_subscription"]
 
 
+# Where to look for the dotenv file. Both locations, because it lives at the
+# repository root while the backend is usually run from `backend/`; later
+# entries win, so a `backend/.env` overrides the shared one. Under Docker
+# Compose none of this applies — `env_file:` injects real environment
+# variables.
+#
+# `XAGENT_ENV_FILE` overrides the search, and the test suite points it at a
+# path that does not exist. Tests must be hermetic: a developer's local .env
+# pointing at a live Redis or flipping a feature flag should never change what
+# the suite asserts.
+_ENV_FILE: str | tuple[str, ...] = os.environ.get("XAGENT_ENV_FILE") or ("../.env", ".env")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

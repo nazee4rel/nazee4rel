@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Response, status
 from sqlalchemy import text
 
+from app import __version__
 from app.api.deps import DbSession
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -51,5 +52,5 @@ async def readiness(db: DbSession, response: Response) -> dict[str, Any]:
         "status": "ready" if ready else "not_ready",
         "checks": checks,
         "environment": settings.environment,
-        "phase": 2,
+        "version": __version__,
     }
