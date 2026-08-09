@@ -1,3 +1,4 @@
+import AlertPanel from "@/components/AlertPanel";
 import {
   ACTION_STATUS_TONE,
   RUN_STATUS_TONE,
@@ -5,8 +6,16 @@ import {
   type AgentPolicy,
   type AgentRun,
 } from "@/components/agent";
+import {
+  DELIVERY_TONE,
+  type AlertRecord,
+  type AlertRuleRecord,
+  type ChannelStatus,
+  type DeliveryRecord,
+} from "@/components/alerts";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
+import { AcknowledgeButton, EvaluateNowButton, RuleToggle } from "./AlertControls";
 import ApprovalCard from "./ApprovalCard";
 
 const STAGES = [
@@ -36,7 +45,16 @@ export default async function AgentPage() {
   const status = await getAccountsStatus();
   const account = status?.accounts[0];
 
-  const [policyResult, runsResult, actionsResult, collectionResult] = await Promise.all([
+  const [
+    policyResult,
+    runsResult,
+    actionsResult,
+    collectionResult,
+    alertsResult,
+    rulesResult,
+    deliveriesResult,
+    channelsResult,
+  ] = await Promise.all([
     apiFetch<AgentPolicy>("/api/v1/agent/policy"),
     account
       ? apiFetch<AgentRun[]>(`/api/v1/agent/${account.id}/runs?limit=15`)
@@ -47,12 +65,23 @@ export default async function AgentPage() {
     account
       ? apiFetch<CollectionRun[]>(`/api/v1/collection/${account.id}/runs?limit=15`)
       : Promise.resolve(null),
+    account ? apiFetch<AlertRecord[]>(`/api/v1/alerts/${account.id}?limit=40`) : Promise.resolve(null),
+    account ? apiFetch<AlertRuleRecord[]>(`/api/v1/alerts/${account.id}/rules`) : Promise.resolve(null),
+    account
+      ? apiFetch<DeliveryRecord[]>(`/api/v1/alerts/${account.id}/deliveries?limit=20`)
+      : Promise.resolve(null),
+    account ? apiFetch<ChannelStatus>(`/api/v1/alerts/${account.id}/channels`) : Promise.resolve(null),
   ]);
 
   const policy = policyResult.ok ? policyResult.data : null;
   const runs = runsResult?.ok ? runsResult.data : [];
   const actions = actionsResult?.ok ? actionsResult.data : [];
   const collectionRuns = collectionResult?.ok ? collectionResult.data : [];
+  const alerts = alertsResult?.ok ? alertsResult.data : [];
+  const alertRules = rulesResult?.ok ? rulesResult.data : [];
+  const deliveries = deliveriesResult?.ok ? deliveriesResult.data : [];
+  const channels = channelsResult?.ok ? channelsResult.data.channels : [];
+  const openAlerts = alerts.filter((a) => a.state === "FIRING");
 
   const pending = actions.filter((a) => a.status === "PENDING_APPROVAL");
   const decided = actions.filter((a) => a.status !== "PENDING_APPROVAL");
@@ -66,6 +95,26 @@ export default async function AgentPage() {
           refused.
         </p>
       </header>
+
+      {/* -------------------------------------------------------------- alerts */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">
+            Alerts
+            {openAlerts.length > 0 && (
+              <span className="ml-2 rounded-full bg-warning px-2 py-0.5 text-[10px] text-canvas">
+                {openAlerts.length}
+              </span>
+            )}
+          </h2>
+          {account && <EvaluateNowButton accountId={account.id} />}
+        </div>
+        <AlertPanel
+          alerts={openAlerts}
+          acknowledge={(alert) => <AcknowledgeButton alertId={alert.id} />}
+          emptyMessage="No open alerts. Rules are checked every 30 minutes."
+        />
+      </section>
 
       {/* ------------------------------------------------------ approval queue */}
       <section className="space-y-3">
@@ -295,6 +344,83 @@ export default async function AgentPage() {
           </div>
         )}
       </section>
+
+      {/* --------------------------------------------------------- alert rules */}
+      {alertRules.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">What raises an alert</h2>
+          <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+            The quiet period after each rule fires is the setting that decides whether
+            this system stays worth listening to. A rule that fires daily gets ignored,
+            and then the one about collection stopping goes unread with it.
+          </p>
+          <div className="rounded-xl border border-border bg-surface px-5">
+            {alertRules.map((rule) => (
+              <RuleToggle key={rule.rule_key} accountId={account!.id} rule={rule} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ------------------------------------------------------- delivery log */}
+      {channels.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">Where alerts go</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {channels.map((channel) => (
+              <div
+                key={channel.channel}
+                className="rounded-xl border border-border bg-surface p-4"
+              >
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium">{channel.channel.toLowerCase()}</p>
+                  <span
+                    className={`text-xs ${channel.configured ? "text-positive" : "text-text-muted"}`}
+                  >
+                    {channel.configured ? "configured" : "not configured"}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-text-muted">{channel.note}</p>
+              </div>
+            ))}
+          </div>
+
+          {deliveries.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+                    <th className="px-4 py-3 font-medium">When</th>
+                    <th className="px-4 py-3 font-medium">Channel</th>
+                    <th className="px-4 py-3 font-medium">Result</th>
+                    <th className="px-4 py-3 font-medium">To</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deliveries.map((delivery) => (
+                    <tr key={delivery.id} className="border-b border-border/50 last:border-0">
+                      <td className="numeric px-4 py-3 whitespace-nowrap text-xs text-text-muted">
+                        {new Date(delivery.created_at).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-xs">{delivery.channel.toLowerCase()}</td>
+                      <td className={`px-4 py-3 text-xs ${DELIVERY_TONE[delivery.status] ?? ""}`}>
+                        {delivery.status.toLowerCase()}
+                        {delivery.error && (
+                          <div className="mt-0.5 max-w-md text-text-muted">{delivery.error}</div>
+                        )}
+                      </td>
+                      {/* Redacted at write time: the delivery log is not an address book. */}
+                      <td className="px-4 py-3 text-xs text-text-muted">
+                        {delivery.target ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ----------------------------------------------------- collection runs */}
       <section className="space-y-3">

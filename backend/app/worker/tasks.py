@@ -312,3 +312,88 @@ def stale_account_check() -> dict[str, Any]:
         return {"stale_accounts": stale}
 
     return run_async(_run())
+
+
+@celery_app.task(name="alerts.evaluate")
+def evaluate_alerts() -> dict[str, Any]:
+    """Run every enabled alert rule for every account.
+
+    Every 30 minutes rather than hourly: the rule that matters most —
+    collection has stopped — describes data being lost while you read it, and
+    an extra half hour of that is an extra half hour that cannot be recovered.
+    Dedupe and cooldown mean the extra frequency costs nothing in noise.
+    """
+
+    async def _run() -> dict[str, Any]:
+        from app.alerts.service import AlertService
+
+        summary: dict[str, Any] = {"accounts": 0, "raised": 0, "resolved": 0, "failed": 0}
+        async with session_scope() as db:
+            account_ids = await active_account_ids(db)
+        summary["accounts"] = len(account_ids)
+
+        for account_id in account_ids:
+            try:
+                async with session_scope() as db:
+                    account = await db.get(XAccount, account_id)
+                    if account is None:
+                        continue
+                    result = await AlertService(db).evaluate(account)
+                    summary["raised"] += len(result.created)
+                    summary["resolved"] += result.resolved
+            except Exception as exc:  # noqa: BLE001
+                summary["failed"] += 1
+                log.exception("alerts.failed", account_id=str(account_id), error=str(exc))
+
+        log.info("alerts.evaluate.completed", **summary)
+        return summary
+
+    return run_async(_run())
+
+
+def _generate_reports(period_name: str) -> dict[str, Any]:
+    """Shared body for the three report schedules."""
+
+    async def _run() -> dict[str, Any]:
+        from app.models.alerting import ReportPeriod
+        from app.reports.service import ReportService
+
+        period = ReportPeriod(period_name)
+        summary: dict[str, Any] = {"period": period_name, "generated": 0, "failed": 0}
+
+        async with session_scope() as db:
+            account_ids = await active_account_ids(db)
+
+        for account_id in account_ids:
+            try:
+                async with session_scope() as db:
+                    account = await db.get(XAccount, account_id)
+                    if account is None:
+                        continue
+                    await ReportService(db).generate(account, period, deliver=True)
+                    summary["generated"] += 1
+            except Exception as exc:  # noqa: BLE001
+                summary["failed"] += 1
+                log.exception(
+                    "reports.failed", period=period_name, account_id=str(account_id), error=str(exc)
+                )
+
+        log.info("reports.completed", **summary)
+        return summary
+
+    return run_async(_run())
+
+
+@celery_app.task(name="reports.daily")
+def daily_report() -> dict[str, Any]:
+    return _generate_reports("DAILY")
+
+
+@celery_app.task(name="reports.weekly")
+def weekly_report() -> dict[str, Any]:
+    return _generate_reports("WEEKLY")
+
+
+@celery_app.task(name="reports.monthly")
+def monthly_report() -> dict[str, Any]:
+    return _generate_reports("MONTHLY")

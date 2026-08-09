@@ -1,4 +1,5 @@
-import ProvenanceBadge from "@/components/ProvenanceBadge";
+import Caveats from "@/components/Caveats";
+import ProvenanceBadge, { type Provenance } from "@/components/ProvenanceBadge";
 import {
   METRIC_LABELS,
   SEVERITY_TONE,
@@ -8,9 +9,11 @@ import {
   type AgentRecommendation,
   type AgentRun,
 } from "@/components/agent";
+import type { ReportRecord } from "@/components/alerts";
 import { apiFetch, getAccountsStatus } from "@/lib/api";
 
 import RecommendationDecision from "./RecommendationDecision";
+import ReportControls from "./ReportControls";
 import RunAgentButton from "./RunAgentButton";
 
 export default async function InsightsPage() {
@@ -25,15 +28,17 @@ export default async function InsightsPage() {
     );
   }
 
-  const [insightsResult, recommendationsResult, runsResult] = await Promise.all([
+  const [insightsResult, recommendationsResult, runsResult, reportsResult] = await Promise.all([
     apiFetch<AgentInsight[]>(`/api/v1/agent/${account.id}/insights?limit=30`),
     apiFetch<AgentRecommendation[]>(`/api/v1/agent/${account.id}/recommendations?limit=30`),
     apiFetch<AgentRun[]>(`/api/v1/agent/${account.id}/runs?limit=1`),
+    apiFetch<ReportRecord[]>(`/api/v1/alerts/${account.id}/reports?limit=6`),
   ]);
 
   const insights = insightsResult.ok ? insightsResult.data : [];
   const recommendations = recommendationsResult.ok ? recommendationsResult.data : [];
   const latestRun = runsResult.ok ? (runsResult.data[0] ?? null) : null;
+  const reports = reportsResult.ok ? reportsResult.data : [];
 
   const graded = recommendations.filter((r) => r.verification_result !== "PENDING");
   const confirmed = graded.filter((r) => r.verification_result === "CONFIRMED").length;
@@ -232,6 +237,55 @@ export default async function InsightsPage() {
                   />
                 </div>
               </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ---------------------------------------------------------- reports */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">Reports</h2>
+          <ReportControls accountId={account.id} />
+        </div>
+        <p className="max-w-3xl text-xs leading-relaxed text-text-muted">
+          Generated daily, weekly and monthly on a schedule, and emailed if SMTP is
+          configured. Every report states its own data coverage — a report covering
+          three days of a week reads exactly like one covering all seven unless it
+          says so, and the missing days can never be recovered.
+        </p>
+
+        {reports.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border bg-surface/50 p-6 text-sm text-text-muted">
+            No reports yet. The first daily report is generated after the next agent
+            cycle, or you can generate one now.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {reports.map((report) => (
+              <details key={report.id} className="rounded-xl border border-border bg-surface p-5">
+                <summary className="cursor-pointer">
+                  <span className="text-sm font-medium">{report.title}</span>
+                  <span className="ml-2 text-xs text-text-muted">
+                    {report.status.replace(/_/g, " ").toLowerCase()}
+                  </span>
+                </summary>
+                <p className="mt-3 text-sm leading-relaxed">{report.summary}</p>
+                <div className="mt-4 space-y-4">
+                  {report.sections.map((section) => (
+                    <div key={section.key}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-medium">{section.title}</h3>
+                        <ProvenanceBadge provenance={section.provenance as Provenance} />
+                      </div>
+                      <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-text-muted">
+                        {section.body}
+                      </p>
+                      {section.caveats.length > 0 && <Caveats items={section.caveats} />}
+                    </div>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         )}

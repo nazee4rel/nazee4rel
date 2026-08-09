@@ -4,9 +4,14 @@ An agentic system that monitors and analyses a single X/Twitter account: it coll
 performance data on a schedule, turns it into insights and recommendations, verifies
 whether its own advice worked, and reports.
 
-**Current status: Phase 7 complete** — the dashboard is built out: headline metrics,
-follower and revenue charts, topic performance, weekday rhythm, and the agent's brief and
-approval queue surfaced from every page.
+**Current status: Phase 8 complete** — alerts and scheduled reports. Ten deterministic
+rules watch for growth spikes and drops, breakout posts, engagement decline, revenue
+movement, unusual churn, and the operational failures that lose data; daily, weekly and
+monthly reports are generated and emailed.
+
+**Phase 7** built out the dashboard: headline metrics, follower and revenue charts, topic
+performance, weekday rhythm, and the agent's brief and approval queue surfaced from every
+page.
 
 **Phase 6** put the agent in place. A daily eight-stage cycle
 (observe, collect, analyse, reason, recommend, act, verify, report) turns the analytics
@@ -113,14 +118,18 @@ backend/
                 timing/format patterns, revenue analytics — all pure functions
     agent/      policy (the allowlist and autonomy tiers), evidence, prompts,
                 grounding, the eight-stage loop, the executor, verification
+    alerts/     detectors, dedupe/cooldown/resolution, dashboard + email channels
+    reports/    daily, weekly and monthly period summaries
     worker/     Celery app and the beat schedule
     cli.py      create-owner, check-config
   alembic/      0001 identity · 0002 OAuth + ledger · 0003 posts + snapshots ·
-                0004 revenue + topics · 0005 agent runs, insights, recommendations, actions
-  tests/        379 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
+                0004 revenue + topics · 0005 agent runs, insights, recommendations,
+                actions · 0006 alert rules, alerts, reports, deliveries
+  tests/        426 tests — auth, crypto, migration parity, OAuth/PKCE, client, cost,
                 probe, scheduling, collectors, analytics, attribution, CSV import,
                 agent policy, grounding, prompt fencing, executor gates, grading,
-                dashboard aggregates and gap handling
+                dashboard aggregates and gap handling, alert dedupe/cooldown/
+                resolution, report coverage
 frontend/
   src/app/      login + the six dashboard sections, App Router, Server Components
   src/lib/      server-side API client (never imported client-side)
@@ -343,6 +352,53 @@ that. A weekday with fewer than three observations has no median and is left bla
 **The approval queue is visible from everywhere** — a count in the sidebar, and a card on
 the Overview. Requests expire after 24 hours, so an unanswered one is not harmless.
 
+### Alerts and reports (Phase 8)
+
+Ten rules, all arithmetic. Nothing here calls a language model: alerts fire unattended, at
+night, into an inbox, and must not depend on an API key being valid or a schema being
+honoured. An account with no Anthropic key still gets told when its collection stops.
+
+**The hard problem is alert fatigue, not detection.** A system that fires daily gets muted,
+and a muted system is worse than none — the one alert that mattered arrives into a channel
+nobody reads any more. So most of `app/alerts/rules.py` is about *not* firing:
+
+- Every statistical rule checks its baseline is reliable first. A "spike" measured against
+  four days of history is not a spike, it is a small number.
+- A breakout post must clear both the 90th percentile *and* double the account's median
+  rate. Percentile alone always has a winner — in ten posts the best is at p95 by
+  construction — so that gate alone would fire every week.
+- Engagement decline compares medians between halves of the window and needs a sustained
+  25% fall, so one bad Tuesday is not an alert.
+
+And three mechanisms sit in `app/alerts/service.py` and the schema:
+
+- **Dedupe** on the identity of the *event*. The same viral post crossing the threshold on
+  eight consecutive runs is one row, enforced by a unique constraint rather than by the
+  service remembering to check.
+- **Cooldown** per rule, so a bad week produces a handful of alerts rather than thirty-five.
+- **Resolution.** Operational rules describe conditions that end, and close themselves when
+  the detector stops seeing them. Statistical rules describe moments and never resolve.
+  Acknowledging is not resolving: "collection has stopped" cannot be dismissed while
+  collection is still stopped.
+
+**The rule that matters most** is `COLLECTION_STALLED`. Every other alert describes
+something that already happened and can be read about later; that one describes data being
+lost as you read it, because impressions inside the 30-day window cannot be re-fetched at
+any price.
+
+**Suspicious activity, honestly scoped.** `UNUSUAL_CHURN` fires on a net follower loss far
+outside the account's usual spread, and its body says plainly what it cannot tell you: a
+platform bot purge, a post that aged badly and a compromised account all look identical
+from here — a number going down. X exposes no follower-event stream, so the alert gives you
+the timing and nothing else.
+
+**Reports** are built as structured sections and stored before they are sent, so a
+misconfigured mail server costs you a notification and never the report. Every report
+states its own data coverage, because one covering three days of a week reads exactly like
+one covering all seven unless it says so. Re-running a period amends the stored report
+rather than producing a second one. Email is plain `smtplib`, off unless configured, and
+recipients are redacted in the delivery log.
+
 ### Three things worth knowing about the X integration
 
 **Endpoints are a registry, not strings.** `app/integrations/x/endpoints.py` declares every
@@ -393,8 +449,8 @@ a live database.
 | 5 | Analytics engine: engagement, baselines, timing, formats, attribution, revenue | Done |
 | 6 | Agent loop, Claude structured outputs, topics, recommendations, verification | Done |
 | 7 | Full dashboard: charts, topic performance, seasonality, approval queue | Done |
-| 8 | Alerts and scheduled reports | Next |
-| 9 | Test hardening, security review, deployment | |
+| 8 | Alerts and scheduled reports | Done |
+| 9 | Test hardening, security review, deployment | Next |
 
 Collection is live as of Phase 4, so the impression dataset is accumulating from now on.
 Everything from here builds on that history rather than racing it.

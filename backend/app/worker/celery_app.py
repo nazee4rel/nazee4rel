@@ -98,4 +98,24 @@ celery_app.conf.beat_schedule = {
         "task": "agent.expire_approvals",
         "schedule": crontab(minute="10"),
     },
+    # Alerts run more often than the agent because the rule that matters most —
+    # collection has stopped — describes data being lost as you read it.
+    # Deduplication and cooldown keep the extra frequency from becoming noise.
+    "alerts-evaluate": {
+        "task": "alerts.evaluate",
+        "schedule": crontab(minute="*/30"),
+    },
+    # Reports run after the agent cycle so the day's insights are in them.
+    "report-daily": {
+        "task": "reports.daily",
+        "schedule": crontab(hour="7", minute="30"),
+    },
+    "report-weekly": {
+        "task": "reports.weekly",
+        "schedule": crontab(hour="7", minute="45", day_of_week="1"),
+    },
+    "report-monthly": {
+        "task": "reports.monthly",
+        "schedule": crontab(hour="8", minute="0", day_of_month="1"),
+    },
 }

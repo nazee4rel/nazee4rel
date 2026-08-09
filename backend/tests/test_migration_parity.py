@@ -51,6 +51,10 @@ EXPECTED_TABLES = {
     "insights",
     "recommendations",
     "agent_actions",
+    "alert_rules",
+    "alerts",
+    "reports",
+    "deliveries",
 }
 
 

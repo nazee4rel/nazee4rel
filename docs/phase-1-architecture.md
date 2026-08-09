@@ -575,6 +575,42 @@ share of posts still unclassified is stated next to the comparison.
 
 ---
 
+## 12. Phase 8 as built — alerts and reports
+
+§4.5 and §9 called for alerts on growth, engagement, revenue and suspicious activity, with
+email and dashboard channels. As built, four things are sharper than that description.
+
+**Alert fatigue is treated as the primary failure mode.** Dedupe keys, per-rule cooldowns
+and a severity floor are in the schema, not in the detectors, and the dedupe key is a unique
+constraint so the guarantee does not depend on the service remembering to check. Most of
+the detector code is refusal logic.
+
+**Stateful and point-in-time rules are distinguished.** Operational conditions
+(collection stopped, budget exhausted, access degraded, freeze at risk) end, and close
+themselves when the detector stops seeing them. Statistical observations do not end and
+never resolve. Conflating the two produces either a banner that sticks or a problem that
+can be clicked away while it is still happening — so `acknowledge` deliberately does not
+resolve.
+
+**"Suspicious activity" is scoped to what the data supports.** X exposes no follower-event
+stream, so `UNUSUAL_CHURN` reports the timing of an unusual net loss and states in its body
+that a bot purge, a bad post and a compromised account are indistinguishable from here.
+Claiming to detect compromise would have been the dishonest option.
+
+**No model is involved.** §4.5 places alerting after the agent in the loop, which invited
+using the agent to write them. Alerts run on their own 30-minute schedule with no LLM call,
+so they keep working when the Anthropic key is missing, the budget is exhausted or the
+model is refusing — which are precisely the conditions under which you most want to hear
+from the system.
+
+**Reply and quote-post ingestion is deferred, not forgotten.** Earlier notes anticipated it
+landing here as the first genuinely attacker-controlled text. It is a collection feature
+rather than an alerting one: it costs money per resource, needs a mention-timeline endpoint
+this registry does not yet declare, and none of the ten rules needs it. The prompt fencing
+built in Phase 6 is already in place for when it arrives.
+
+---
+
 ## Sources
 
 - [X API pricing update: Owned Reads $0.001, effective April 20 2026 — X Developers](https://devcommunity.x.com/t/x-api-pricing-update-owned-reads-now-0-001-other-changes-effective-april-20-2026/263025)

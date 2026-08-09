@@ -1,3 +1,4 @@
+import AlertPanel from "@/components/AlertPanel";
 import CapabilityMatrix from "@/components/CapabilityMatrix";
 import Caveats from "@/components/Caveats";
 import CollectionHealth, { type CollectionHealthData } from "@/components/CollectionHealth";
@@ -5,6 +6,7 @@ import MetricTile from "@/components/MetricTile";
 import ProvenanceBadge from "@/components/ProvenanceBadge";
 import { BarSeries, ChartCard, GapLegend, LineChart, type Point } from "@/components/charts";
 import type { AgentAction, AgentRun } from "@/components/agent";
+import type { AlertRecord } from "@/components/alerts";
 import {
   compact,
   formatRate,
@@ -64,8 +66,15 @@ export default async function OverviewPage({
 
   // One round trip per concern, issued together. The headline figures all come
   // from `/summary`, so they cannot disagree with each other.
-  const [summaryResult, seriesResult, healthResult, usageResult, runsResult, actionsResult] =
-    await Promise.all([
+  const [
+    summaryResult,
+    seriesResult,
+    healthResult,
+    usageResult,
+    runsResult,
+    actionsResult,
+    alertsResult,
+  ] = await Promise.all([
       account
         ? apiFetch<SummaryResponse>(`/api/v1/analytics/${account.id}/summary?days=30`)
         : null,
@@ -78,6 +87,9 @@ export default async function OverviewPage({
       account
         ? apiFetch<AgentAction[]>(`/api/v1/agent/${account.id}/actions?pending_only=true`)
         : null,
+      account
+        ? apiFetch<AlertRecord[]>(`/api/v1/alerts/${account.id}?open_only=true&limit=10`)
+        : null,
     ]);
 
   const summary = summaryResult?.ok ? summaryResult.data : null;
@@ -86,6 +98,7 @@ export default async function OverviewPage({
   const usage = usageResult.ok ? usageResult.data : null;
   const latestRun = runsResult?.ok ? (runsResult.data[0] ?? null) : null;
   const pending = actionsResult?.ok ? actionsResult.data : [];
+  const openAlerts = alertsResult?.ok ? alertsResult.data : [];
 
   return (
     <div className="space-y-8">
@@ -124,6 +137,19 @@ export default async function OverviewPage({
             <ConnectXButton writeEnabled={status.write_actions_enabled} />
           </div>
         </div>
+      )}
+
+      {/* Above the metrics on purpose: an open alert is the thing to read
+          first, and a critical one usually explains why the numbers below it
+          look the way they do. */}
+      {openAlerts.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">Needs your attention</h2>
+          <AlertPanel alerts={openAlerts} />
+          <a href="/agent" className="inline-block text-xs text-accent hover:underline">
+            Manage alerts and rules →
+          </a>
+        </section>
       )}
 
       {/* --------------------------------------------------------- headline */}

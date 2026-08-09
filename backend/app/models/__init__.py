@@ -25,6 +25,19 @@ from app.models.agent import (
     RecommendationStatus,
     VerificationResult,
 )
+from app.models.alerting import (
+    Alert,
+    AlertRule,
+    AlertRuleKey,
+    AlertSeverity,
+    AlertState,
+    Delivery,
+    DeliveryChannel,
+    DeliveryStatus,
+    Report,
+    ReportPeriod,
+    ReportStatus,
+)
 from app.models.audit import AuditLog, SystemLog
 from app.models.collection import CollectionKind, CollectionRun, CollectionStatus
 from app.models.content import (
@@ -64,6 +77,11 @@ __all__ = [
     "AgentRunStatus",
     "AgentRunTrigger",
     "AgentStage",
+    "Alert",
+    "AlertRule",
+    "AlertRuleKey",
+    "AlertSeverity",
+    "AlertState",
     "ApiUsageLedger",
     "AuditAction",
     "AuditLog",
@@ -75,6 +93,9 @@ __all__ = [
     "CollectionKind",
     "CollectionRun",
     "CollectionStatus",
+    "Delivery",
+    "DeliveryChannel",
+    "DeliveryStatus",
     "Insight",
     "InsightKind",
     "InsightSeverity",
@@ -89,6 +110,9 @@ __all__ = [
     "Provenance",
     "Recommendation",
     "RecommendationStatus",
+    "Report",
+    "ReportPeriod",
+    "ReportStatus",
     "RevenueAttribution",
     "RevenueEntry",
     "RevenueSourceType",

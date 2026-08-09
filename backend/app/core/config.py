@@ -96,6 +96,19 @@ class Settings(BaseSettings):
     anthropic_model_deep: str = "claude-opus-5"
     anthropic_model_fast: str = "claude-sonnet-5"
 
+    # --- Alerts and reports (Phase 8) ---------------------------------------
+    # Email is off unless SMTP_HOST, ALERT_EMAIL_FROM and ALERT_EMAIL_TO are all
+    # set. With it off, alerts and reports are still generated and readable in
+    # the dashboard — delivery is a separate concern from detection.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_starttls: bool = True
+    smtp_use_ssl: bool = False
+    alert_email_from: str = ""
+    alert_email_to: str = ""
+
     # --- Rate limiting ------------------------------------------------------
     login_attempts_per_15min: int = Field(default=10, ge=1)
     api_requests_per_minute: int = Field(default=120, ge=1)
