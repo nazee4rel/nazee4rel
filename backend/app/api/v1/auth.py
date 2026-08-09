@@ -27,6 +27,7 @@ from app.schemas.auth import (
     MessageOut,
     RegisterRequest,
     SessionOut,
+    SetupStatusOut,
     UserOut,
 )
 from app.services.auth_service import AuthService
@@ -46,6 +47,26 @@ def _set_session_cookie(response: Response, token: str) -> None:
         domain=settings.cookie_domain or None,
         path="/",
     )
+
+
+@router.get("/setup-status", response_model=SetupStatusOut)
+async def setup_status(db: DbSession) -> SetupStatusOut:
+    """Whether this instance still needs its owner account created.
+
+    The login page has to choose between "sign in" and "create the owner", and
+    it must not guess. Before this existed it probed `POST /auth/register` and
+    read a 403 as "owner exists" — which meant every other response, including
+    the 429 from that endpoint's own 5/hour limit, was read as "registration is
+    open" and showed a first-run setup form on a configured instance. Loading
+    the login page five times was enough to trigger it, because the probe spent
+    the registration budget it was measuring.
+
+    So the question gets its own endpoint: a cheap read, no side effects,
+    nothing to exhaust. It discloses only whether the instance is configured,
+    which either form on the login page already makes obvious.
+    """
+    existing = await db.scalar(select(func.count()).select_from(User))
+    return SetupStatusOut(owner_exists=bool(existing))
 
 
 @router.post(

@@ -430,3 +430,66 @@ class TestEnumsAreNativeTypes:
             )
         assert "GUESSED" in str(caught.value) or "invalid input value" in str(caught.value)
         await pg_session.rollback()
+
+
+class TestWorkerEventLoopIsolation:
+    """The Celery bridge, exercised the way a real worker exercises it.
+
+    `run_async` opens a fresh event loop per task, but the engine is a module
+    global and its pooled asyncpg connections stay bound to the loop that opened
+    them. Without disposing the pool, the second task in a worker process checks
+    out a connection whose loop has been closed and dies with "got Future
+    attached to a different loop".
+
+    Nothing else in the suite can catch this. `test_worker.py` substitutes
+    `session_scope` for a SQLite-backed one, and aiosqlite tolerates cross-loop
+    reuse because each connection lives on its own thread. It takes real asyncpg
+    and a real second task to reproduce, which is exactly what this does.
+
+    The failure matters more than it looks: the worker would finish its first
+    task and fail every one afterwards. For an hourly collector whose data
+    cannot be re-fetched after 30 days, that is silent, permanent loss behind a
+    process that is still up.
+    """
+
+    def test_a_second_task_does_not_inherit_a_dead_loops_connections(
+        self, pg_schema: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+        from app.db import session as db_session
+        from app.worker import tasks
+
+        monkeypatch.setattr(get_settings(), "database_url_override", POSTGRES_URL)
+        # Deliberately not `dispose_engine()`: this test is about the global
+        # engine, so it starts and ends with the globals cleared.
+        monkeypatch.setattr(db_session, "_engine", None)
+        monkeypatch.setattr(db_session, "_sessionmaker", None)
+
+        first = tasks.cleanup_oauth_states.run()
+        second = tasks.cleanup_oauth_states.run()
+        third = tasks.cleanup_oauth_states.run()
+
+        assert first == second == third == {"deleted": 0}
+
+    def test_the_pool_is_emptied_between_tasks(
+        self, pg_schema: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The mechanism, not just the symptom.
+
+        Asserting on the pool directly means a future change that keeps tasks
+        working by some other route still has to say so explicitly here.
+        """
+        from app.core.config import get_settings
+        from app.db import session as db_session
+
+        monkeypatch.setattr(get_settings(), "database_url_override", POSTGRES_URL)
+        monkeypatch.setattr(db_session, "_engine", None)
+        monkeypatch.setattr(db_session, "_sessionmaker", None)
+
+        from app.worker import tasks
+
+        tasks.cleanup_oauth_states.run()
+        # `run_async` clears the globals on its way out, so there is no pool left
+        # holding connections bound to the loop that has just closed.
+        assert db_session._engine is None
+        assert db_session._sessionmaker is None

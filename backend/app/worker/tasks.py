@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 
 from app.collectors.collector import Collector, active_account_ids, build_collector
 from app.core.logging import get_logger
-from app.db.session import session_scope
+from app.db.session import dispose_engine, session_scope
 from app.models.usage import OAuthState
 from app.models.x_account import XAccount
 from app.worker.celery_app import celery_app
@@ -34,12 +34,27 @@ def run_async[T](coro: Awaitable[T]) -> T:
 
     A fresh event loop per task keeps tasks isolated from each other and avoids
     reusing a loop left in a bad state by a previous failure.
+
+    That isolation is only real if the connection pool is emptied to match. The
+    engine is a module global, so its pooled asyncpg connections stay bound to
+    the loop that opened them; leaving them behind means the *next* task checks
+    out a connection attached to a loop that has since been closed, and asyncpg
+    rejects it with "got Future attached to a different loop". The worker would
+    then complete its first task and fail every one after it — which, for
+    collection, is permanent data loss dressed up as a running worker.
+
+    So the pool is disposed here, inside the loop that owns it, before that loop
+    closes. The cost is one reconnect per task; at this cadence that is nothing.
     """
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
         return loop.run_until_complete(coro)
     finally:
+        try:
+            loop.run_until_complete(dispose_engine())
+        except Exception as exc:  # noqa: BLE001 — never mask the task's own error
+            log.warning("worker.engine_dispose_failed", error=str(exc))
         loop.close()
         asyncio.set_event_loop(None)
 

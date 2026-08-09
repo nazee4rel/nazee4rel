@@ -42,6 +42,12 @@ ROUTER_MODULES = (accounts, agent, alerts, analytics, auth, collection, health, 
 PUBLIC_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/auth/login"): "You cannot log in with a session you do not have.",
     ("POST", "/auth/register"): "Bootstraps the first account; rate-limited to 5/hour.",
+    (
+        "GET",
+        "/auth/setup-status",
+    ): "Tells the login page which form to show, before anyone can have a session. "
+    "Discloses one boolean — whether the owner exists — which either form makes "
+    "obvious anyway.",
     ("GET", "/health/live"): "Liveness probe. Returns no data about the account.",
     ("GET", "/health/ready"): "Readiness probe. Reports dependency reachability only.",
     (

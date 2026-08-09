@@ -8,17 +8,19 @@ import AuthForm from "./AuthForm";
  * Decides between sign-in and first-run setup.
  *
  * The backend closes registration once the owner exists (single-tenant, per
- * decision 5), so the page asks it which mode applies rather than guessing:
- * a 403 from the register endpoint means an owner is already set up.
+ * decision 5) and answers this question directly. It used to be inferred from
+ * a `POST /auth/register` probe, reading 403 as "owner exists" — which turned
+ * every other status into "registration is open", including the 429 that
+ * endpoint's own 5/hour limit returns. Five page loads showed a first-run
+ * setup form on a fully configured instance, and the owner could not sign in.
+ *
+ * Note which way the fallback points: an unreadable answer means *sign in*.
+ * Showing a sign-in form to someone who needs to register is a dead end they
+ * can back out of; showing a setup form on a live instance is not.
  */
 async function ownerExists(): Promise<boolean> {
-  const probe = await apiFetch("/api/v1/auth/register", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-  // 403 => registration closed => owner exists.
-  // 422 => endpoint open, our empty body was simply invalid.
-  return !probe.ok && probe.status === 403;
+  const result = await apiFetch<{ owner_exists: boolean }>("/api/v1/auth/setup-status");
+  return result.ok ? result.data.owner_exists : true;
 }
 
 export default async function LoginPage() {

@@ -7,6 +7,56 @@ from httpx import AsyncClient
 from tests.conftest import TEST_EMAIL, TEST_PASSWORD
 
 
+class TestSetupStatus:
+    """Which form the login page shows.
+
+    This was inferred from a `POST /auth/register` probe, where 403 meant "owner
+    exists" and everything else meant "registration is open". The endpoint is
+    rate-limited to 5/hour, and the probe spent that budget itself — so the
+    sixth login page load in an hour got a 429, read it as "open", and offered
+    to create an owner on an instance that already had one. The owner was then
+    unable to sign in at all.
+    """
+
+    async def test_reports_no_owner_on_a_fresh_instance(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/v1/auth/setup-status")
+        assert resp.status_code == 200
+        assert resp.json() == {"owner_exists": False}
+
+    async def test_reports_an_owner_once_one_exists(self, registered_client: AsyncClient) -> None:
+        resp = await registered_client.get("/api/v1/auth/setup-status")
+        assert resp.status_code == 200
+        assert resp.json() == {"owner_exists": True}
+
+    async def test_needs_no_session(self, client: AsyncClient) -> None:
+        """It is the question you ask *before* you can have one."""
+        assert (await client.get("/api/v1/auth/setup-status")).status_code == 200
+
+    async def test_repeated_calls_do_not_exhaust_anything(self, client: AsyncClient) -> None:
+        """The specific regression: the page load must not spend a mutation budget."""
+        for _ in range(12):
+            resp = await client.get("/api/v1/auth/setup-status")
+            assert resp.status_code == 200, resp.text
+        # And registration is still available afterwards, which is what the old
+        # probe destroyed.
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "owner@example.com",
+                "password": TEST_PASSWORD,
+                "display_name": "Owner",
+            },
+        )
+        assert resp.status_code == 201
+
+    async def test_discloses_nothing_beyond_the_one_boolean(
+        self, registered_client: AsyncClient
+    ) -> None:
+        resp = await registered_client.get("/api/v1/auth/setup-status")
+        assert set(resp.json()) == {"owner_exists"}
+        assert TEST_EMAIL not in resp.text
+
+
 class TestRegistration:
     async def test_creates_owner_and_sets_cookie(self, client: AsyncClient) -> None:
         resp = await client.post(
