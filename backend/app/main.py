@@ -29,7 +29,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     log.info(
         "app.starting",
         environment=settings.environment,
-        phase=2,
+        version=__version__,
         write_actions_enabled=settings.x_enable_write_actions,
     )
     yield

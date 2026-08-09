@@ -82,3 +82,13 @@ class SessionOut(BaseModel):
 
 class MessageOut(BaseModel):
     message: str
+
+
+class SetupStatusOut(BaseModel):
+    """Answer to "does this instance have an owner yet?".
+
+    Deliberately one boolean. The login page needs to pick a form, not learn
+    anything else about who is registered.
+    """
+
+    owner_exists: bool
