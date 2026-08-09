@@ -13,10 +13,19 @@ import os
 from collections.abc import AsyncGenerator
 
 # Environment must be configured before app modules import Settings.
+#
+# The dotenv search is disabled outright: a developer running the suite with a
+# real .env present would otherwise inherit their live Redis (making the rate
+# limiter fire mid-suite) or their feature flags. Tests configure everything
+# they need explicitly, below.
+os.environ["XAGENT_ENV_FILE"] = "/nonexistent/xagent-tests.env"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-for-validation-x")
 os.environ.setdefault("TOKEN_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"0" * 32).decode())
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("DATABASE_URL_OVERRIDE", "sqlite+aiosqlite:///:memory:")
+# Deliberately unreachable: the rate limiter falls back to process-local state,
+# so tests never depend on a Redis being up or share counters between runs.
+os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:1/0")
 
 # Dummy X credentials so the OAuth handshake can be exercised. No test makes a
 # real call to X — every one runs against httpx.MockTransport.

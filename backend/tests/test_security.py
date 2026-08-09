@@ -309,6 +309,36 @@ class TestProductionConfiguration:
         assert settings.allowed_host_list == ["*"]
 
 
+class TestSuiteIsolation:
+    """The suite must not inherit a developer's local configuration.
+
+    Settings looks for `.env` at the repository root as well as in `backend/`,
+    so that running the backend natively works without a symlink. That
+    convenience is a hazard for tests: a real .env pointing at a live Redis
+    makes the rate limiter fire mid-suite, and a flipped feature flag would
+    change what the agent tests assert. Both happened before this was pinned.
+    """
+
+    def test_dotenv_is_disabled_during_tests(self) -> None:
+        import os
+
+        from app.core.config import _ENV_FILE
+
+        assert os.environ.get("XAGENT_ENV_FILE"), "conftest must pin XAGENT_ENV_FILE"
+        assert not Path(str(_ENV_FILE)).exists(), (
+            "tests are reading a real dotenv file; they must be hermetic"
+        )
+
+    def test_settings_ignore_a_dotenv_that_exists(self) -> None:
+        """Belt and braces: even with a .env on disk, the test config wins."""
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        assert settings.database_url.startswith("sqlite"), settings.database_url
+        # Unreachable on purpose, so the limiter uses its process-local fallback.
+        assert "6399" not in settings.redis_url
+
+
 class TestResponseHardening:
     async def test_security_headers_are_present(self, client: AsyncClient) -> None:
         response = await client.get("/api/v1/health/live")

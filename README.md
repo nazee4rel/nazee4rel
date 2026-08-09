@@ -56,18 +56,70 @@ make backup                 # then put this on a cron job, off the machine
 database and nowhere else — not in X's API, not in X's dashboard, not for any amount of
 money. That is the one operational fact that makes this system different from most.
 
-## Quick start
+## Running it locally
 
-Requires Docker and Docker Compose.
+Two paths. The Docker one is fewer commands; the manual one is the one verified in this
+environment, because the container registry was unreachable and the images have never been
+built here.
+
+### With Docker
 
 ```bash
-git clone <this-repo> && cd nazee4rel
-make setup     # creates .env and generates real secrets
+git clone https://github.com/nazee4rel/nazee4rel && cd nazee4rel
+make setup     # writes .env and generates real secrets
 make up        # builds, applies migrations, starts everything
 ```
 
-Then open **http://localhost:3000** and create the owner account. Registration closes
-once that account exists — this is a single-tenant deployment.
+Then open **http://localhost:3000** and create the owner account.
+
+### Without Docker
+
+You need PostgreSQL 16, Redis, Python 3.12 and Node 22 running locally.
+
+```bash
+# 1. Secrets. Generates SECRET_KEY, TOKEN_ENCRYPTION_KEY and a database password.
+make setup
+
+# 2. Point .env at your local services rather than the compose hostnames:
+#      POSTGRES_HOST=127.0.0.1   POSTGRES_PORT=5432   POSTGRES_USER=<you>
+#      REDIS_URL=redis://127.0.0.1:6379/0
+#      BACKEND_INTERNAL_URL=http://127.0.0.1:8000
+$EDITOR .env
+
+createdb xagent
+
+# 3. Backend
+cd backend
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m app.cli check-config     # confirms it can see Postgres and Redis
+alembic upgrade head
+python -m app.cli create-owner     # prompts for email, name, timezone, password
+uvicorn app.main:app --reload --port 8000
+
+# 4. Frontend, in a second terminal
+cd frontend
+npm install
+npm run dev
+```
+
+Collection runs on a schedule, so for anything to accumulate you also want the worker and
+the scheduler, in two more terminals:
+
+```bash
+cd backend && source .venv/bin/activate
+celery -A app.worker.celery_app worker --loglevel=info   # runs the jobs
+celery -A app.worker.celery_app beat   --loglevel=info   # decides when
+```
+
+Without those, the dashboard renders but never fills in — which is also what it looks like
+when collection breaks in production, so the Overview page says so explicitly rather than
+showing empty charts.
+
+### Then
+
+Open **http://localhost:3000**, sign in, and connect your X account from the Overview page.
+Registration closes once the owner exists — this is a single-tenant deployment.
 
 | Service | URL |
 |---|---|
@@ -75,10 +127,15 @@ once that account exists — this is a single-tenant deployment.
 | API docs | http://localhost:8000/docs |
 | Health | http://localhost:8000/api/v1/health/ready |
 
+You can get a long way before connecting anything: the whole app runs without X credentials
+(nothing to collect), and without an Anthropic key (agent runs finish as `PARTIAL`, with
+collection, analytics, alerts and reports all still working).
+
 ```bash
 make logs      # tail backend logs
-make test      # run the backend test suite
+make test      # backend test suite, in-memory SQLite, no setup
 make lint      # ruff + mypy
+make audit     # dependency CVE check
 make down      # stop
 make reset     # destroy all data and rebuild
 ```
